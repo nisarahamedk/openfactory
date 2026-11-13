@@ -149,6 +149,10 @@ const ExtrasFile = z
     rollout: z.object({ candidate: z.string().min(1).nullable().default(null), share: z.number().min(0).max(1).default(0) }).optional(),
     /** How each version differs: extra prompt text, other model routing. */
     versions: z.record(z.string(), z.object({ prompt: z.string().optional(), models: Routing.optional() })).default({}),
+    /** The world check run against each settled PR head: a provider package that provides `worldCheck`. */
+    world: z
+      .object({ provider: z.string().min(1), name: z.string().min(1), simDays: z.number().int().positive().default(30), options: z.record(z.string(), z.unknown()).default({}) })
+      .optional(),
     /** Merge-risk rules. */
     risk: z.object({ riskyPaths: z.array(z.string()).optional(), mediumLines: z.number().optional(), highLines: z.number().optional() }).optional(),
   })
@@ -159,6 +163,7 @@ export type FactoryExtras = {
   versionPrompts: Record<string, string>;
   versionModels: Record<string, ModelRouting>;
   risk: RiskConfig;
+  world: { provider: string; name: string; simDays: number; options: Record<string, unknown> } | null;
 };
 
 /**
@@ -182,6 +187,7 @@ export function loadFactoryExtras(stableVersion: string, path?: string): Factory
     versionPrompts,
     versionModels,
     risk: { ...DEFAULT_RISK, ...(doc.risk ?? {}) },
+    world: doc.world ?? null,
   };
 }
 
@@ -250,6 +256,15 @@ export class ProviderRegistry {
       return (await mod.fromEnv({ ...env, ...fromOptions })) as Abstractions[K];
     }
     throw new Error(`${pkg} does not provide "${key}" (export provider.provides.${key} or fromEnv)`);
+  }
+
+  /** A provider for something outside ABSTRACTION_KEYS (e.g. worldCheck), by package or alias. */
+  async buildOptional<T>(key: string, sel: Selection): Promise<T> {
+    const pkg = ProviderRegistry.packageFor(sel.name);
+    const mod = await this.importer(pkg);
+    const make = (mod.provider?.provides as Record<string, ((ctx: unknown) => unknown) | undefined> | undefined)?.[key];
+    if (!make) throw new Error(`${pkg} does not provide "${key}"`);
+    return (await make({ options: sel.options, env: this.env, log: this.log })) as T;
   }
 
   async buildAll(selections: Selections): Promise<Partial<Abstractions>> {

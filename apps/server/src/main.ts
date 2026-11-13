@@ -8,7 +8,7 @@ import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
 import { GitHubClient, parseWebhook } from "@openfactory/github";
-import type { AgentHarness, CodeForge, Directory, MetricsSink, OutcomeSource, Signal, Team, TaskId } from "@openfactory/contracts";
+import type { AgentHarness, CodeForge, Directory, MetricsSink, OutcomeSource, Signal, Team, TaskId, WorldCheck } from "@openfactory/contracts";
 import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
@@ -56,6 +56,10 @@ async function main() {
   log("model routing", { routing: modelRouting });
   const extras = loadFactoryExtras(cfg.FACTORY_VERSION, cfg.FACTORY_FILE);
   log("rollout", { rollout: extras.rollout });
+  const world = extras.world
+    ? { check: await registry.buildOptional<WorldCheck>("worldCheck", { name: extras.world.provider, options: extras.world.options }), world: extras.world.name, simDays: extras.world.simDays }
+    : null;
+  log("world check", { world: world ? `${world.world} (${world.simDays} days)` : null });
   const workspace = need(p.workspace, "workspace");
   const environment = need(p.devEnvironment, "devEnvironment");
   const forge = need(p.codeForge, "codeForge");
@@ -94,6 +98,7 @@ async function main() {
           }
         : null,
       scorers: factScorers,
+      world,
       sinks,
       config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/", risk: extras.risk, versionPrompts: extras.versionPrompts },
       log,
