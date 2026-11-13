@@ -5,7 +5,7 @@
  *
  * Fixed rules tonight:
  *  - A task starts when an issue gets the factory label, once per issue.
- *  - Our own bot's comments never wake anything (no loops).
+ *  - Our own bot's comments never wake anything (no loops); other bots' comments don't either.
  *  - Review comments on the task's PR start a review round on the SAME session.
  *  - A PR goes to review only with evidence that names its head commit.
  *  - Humans merge; the factory never merges.
@@ -45,6 +45,9 @@ function fromOurBot(signal: Signal, cfg: RulesConfig): boolean {
 /** Decide what a signal means for the task it belongs to (`task` is null when none matches). */
 export function decide(task: TaskRecord | null, signal: Signal, cfg: RulesConfig): Action {
   if (fromOurBot(signal, cfg)) return { kind: "ignore", reason: "own bot" };
+  // Other bots (CI previews, linters, dependabot) comment on PRs too; only people steer or retry a task.
+  if ((signal.type === "issue_comment" || signal.type === "pr_review_comment") && signal.actor.isBot)
+    return { kind: "ignore", reason: "bot comment" };
 
   switch (signal.type) {
     case "issue_labeled":
