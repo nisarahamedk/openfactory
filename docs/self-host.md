@@ -57,6 +57,36 @@ What the chart generates for you is stored in Secret `<release>-generated`. It i
 - `LITELLM_MASTER_KEY`;
 - `DASHBOARD_PASSWORD`.
 
+## GitHub App (recommended)
+
+With a GitHub App, each task's agent gets its own token, limited to the task's repos and valid for 1 hour. The server uses the app's installation token for its own calls. Without an app, the factory and every agent share one token. The start-up checks (`GET /v1/health`, and the factory app) say which mode is on.
+
+1. Go to GitHub → your org → Settings → Developer settings → GitHub Apps → **New GitHub App**.
+2. Fill in the basics:
+   - Name: anything, such as `acme-factory`. Its comments show as `acme-factory[bot]`.
+   - Homepage URL: the factory's URL.
+   - Webhook: untick **Active**, unless you use `signals: webhook`.
+3. Repository permissions:
+   - **Contents, Issues, Pull requests:** Read and write.
+   - **Checks, Commit statuses, Actions:** Read.
+   - **Metadata:** Read.
+4. Organization permissions: **Members** Read, only if you use GitHub teams as the directory.
+5. Where can it be installed: **Only on this account**. Create it.
+6. On the app's page:
+   - Note the **App ID**.
+   - Under **Private keys**, press **Generate a private key**. A `.pem` file downloads.
+7. **Install App** → your org → **Only select repositories** → the factory's repos.
+8. Store the two values as a Secret, then point the chart at it:
+
+   ```bash
+   kubectl -n factory create secret generic openfactory-github-app \
+     --from-literal=GITHUB_APP_ID=123456 --from-file=GITHUB_APP_PRIVATE_KEY=./acme-factory.pem
+   helm upgrade factory deploy/helm/openfactory -n factory --reuse-values \
+     --set secrets.githubApp.name=openfactory-github-app --set secrets.github.name=
+   ```
+
+The app's installation for the first repo in `repos` serves the server's own calls. Each task token covers repos of one owner, so keep a task's repos under one org.
+
 ## Configure
 
 Everything is in `values.yaml`. The parts you will touch:

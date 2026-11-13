@@ -10,6 +10,7 @@
 import { verify } from "@octokit/webhooks-methods";
 import { GitHubDirectory } from "./directory.js";
 import { GitHubOutcomeSource } from "./outcomes.js";
+import { githubAppFromEnv, type GitHubAppAuth } from "./app.js";
 import {
   defineProvider,
   type ProviderContext,
@@ -78,7 +79,7 @@ export class GitHubCodeForge implements CodeForge {
   readonly name = "github";
   constructor(
     private readonly gh: GitHubClient,
-    private readonly opts: { token: () => string | Promise<string> },
+    private readonly opts: { token: () => string | Promise<string>; mint?: (repo: RepoRef) => Promise<{ token: string; expiresAt: string }> },
   ) {}
 
   async openPullRequest(input: { repo: RepoRef; head: string; base: string; title: string; body: string }) {
@@ -117,8 +118,12 @@ export class GitHubCodeForge implements CodeForge {
     if (missing.length) await this.gh.request("POST", `${r(repo)}/issues/${number}/labels`, { labels: missing });
   }
 
-  /** With a PAT this is the PAT itself; a GitHub App deployment swaps in installation tokens here. */
-  async mintPushToken(_repo: RepoRef) {
+  /**
+   * The agent's token for one repo. With a GitHub App: an installation token for that repo only, 1 hour.
+   * With a PAT there is nothing narrower to give, so it is the PAT itself (the start-up checks say so).
+   */
+  async mintPushToken(repo: RepoRef) {
+    if (this.opts.mint) return this.opts.mint(repo);
     return { token: await this.opts.token(), expiresAt: new Date(Date.now() + 3600_000).toISOString() };
   }
 }
@@ -283,14 +288,22 @@ export async function parseWebhook(
 // ───────────────────────────── provider ─────────────────────────────
 
 
-function clientFrom(ctx: ProviderContext): { gh: GitHubClient; token: () => string } {
+/** One GitHub App per env, shared by every abstraction this provider registers (one token cache). */
+const apps = new WeakMap<object, GitHubAppAuth | null>();
+
+function clientFrom(ctx: ProviderContext): { gh: GitHubClient; token: () => string | Promise<string>; app: GitHubAppAuth | null } {
+  const apiUrl = typeof ctx.options.apiUrl === "string" ? ctx.options.apiUrl : undefined;
+  if (!apps.has(ctx.env)) apps.set(ctx.env, githubAppFromEnv(ctx.env, apiUrl ? { apiUrl } : {}));
+  const app = apps.get(ctx.env) ?? null;
   const tokenEnv = typeof ctx.options.tokenEnv === "string" ? ctx.options.tokenEnv : "GITHUB_TOKEN";
-  const token = () => {
-    const t = ctx.env[tokenEnv];
-    if (!t) throw new Error(`github provider: ${tokenEnv} is not set`);
-    return t;
-  };
-  return { gh: new GitHubClient({ token, ...(typeof ctx.options.apiUrl === "string" ? { apiUrl: ctx.options.apiUrl } : {}) }), token };
+  const token = app
+    ? () => app.serverToken()
+    : () => {
+        const t = ctx.env[tokenEnv];
+        if (!t) throw new Error(`github provider: set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY, or ${tokenEnv}`);
+        return t;
+      };
+  return { gh: new GitHubClient({ token, ...(apiUrl ? { apiUrl } : {}) }), token, app };
 }
 
 function reposFrom(ctx: ProviderContext): RepoRef[] {
@@ -313,8 +326,8 @@ export const provider = defineProvider({
   name: "github",
   provides: {
     codeForge: (ctx) => {
-      const { gh, token } = clientFrom(ctx);
-      return new GitHubCodeForge(gh, { token });
+      const { gh, token, app } = clientFrom(ctx);
+      return new GitHubCodeForge(gh, { token, ...(app ? { mint: (repo: RepoRef) => app.taskToken([repo]) } : {}) });
     },
     chat: (ctx) => new GitHubChat(clientFrom(ctx).gh),
     signals: (ctx) =>
@@ -339,3 +352,4 @@ export const provider = defineProvider({
 
 export { GitHubOutcomeSource, isRevertOf, mentions, type GitHubOutcomeOptions } from "./outcomes.js";
 export { GitHubDirectory, type GitHubDirectoryOptions } from "./directory.js";
+export { GitHubAppAuth, githubAppFromEnv, TASK_TOKEN_PERMISSIONS, type GitHubAppOptions } from "./app.js";

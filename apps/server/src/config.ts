@@ -18,7 +18,11 @@ const Env = z.object({
   MAX_REVIEW_ROUNDS: z.coerce.number().default(4),
   MAX_NUDGES: z.coerce.number().default(2),
 
-  GITHUB_TOKEN: z.string(),
+  /** A fine-grained PAT. Without a GitHub App, the agent gets this same token (see GITHUB_APP_*). */
+  GITHUB_TOKEN: z.string().optional(),
+  /** A GitHub App: the server uses an installation token, each task gets one scoped to its repos for 1 hour. */
+  GITHUB_APP_ID: z.string().optional(),
+  GITHUB_APP_PRIVATE_KEY: z.string().optional(),
   GITHUB_WEBHOOK_SECRET: z.string().optional(),
   SIGNALS: z.enum(["poll", "webhook", "both"]).default("poll"),
   POLL_INTERVAL_MS: z.coerce.number().default(20_000),
@@ -53,6 +57,8 @@ export type Config = z.infer<typeof Env> & { repos: RepoRef[]; agentEnv: Record<
 
 export function loadConfig(env: Record<string, string | undefined>): Config {
   const c = Env.parse(env);
+  if (!c.GITHUB_TOKEN && !(c.GITHUB_APP_ID && c.GITHUB_APP_PRIVATE_KEY))
+    throw new Error("Set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY (a GitHub App, recommended), or GITHUB_TOKEN (a PAT).");
   const repos = c.FACTORY_REPOS.split(",")
     .map((s) => s.trim())
     .filter(Boolean)

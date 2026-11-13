@@ -47,7 +47,9 @@ const aborted = (_t: unknown, rt: Rt, c: Context) => rt.commit(() => ({ status: 
  * the retries, stops the task with its kind and a fix, so a person knows what to do.
  */
 async function guarded(deps: JobDeps, taskId: TaskId, stage: string, rt: Rt, c: Context, body: () => Promise<void>) {
-  const delays = deps.config.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const all = deps.config.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  // A retried agent turn runs the whole turn again, which is the expensive part: one automatic retry only.
+  const delays = stage === "agent turn" ? all.slice(0, 1) : all;
   for (let attempt = 0; ; attempt++) {
     try {
       await body();

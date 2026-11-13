@@ -22,6 +22,7 @@
  * network path into the pod and the pod needs no open port.
  */
 import { PassThrough, Readable, Writable } from "node:stream";
+import { githubAppFromEnv } from "@openfactory/github";
 import * as k8s from "@kubernetes/client-node";
 import type { RepoRef, TaskId, Workspace, WorkspaceHandle } from "@openfactory/contracts";
 
@@ -489,6 +490,8 @@ export function fromEnv(env: Env): K8sWorkspace {
   const kubeConfig = new k8s.KubeConfig();
   if (env.KUBECONFIG !== undefined && env.KUBECONFIG !== "") kubeConfig.loadFromFile(env.KUBECONFIG);
   else kubeConfig.loadFromCluster();
+  // With a GitHub App, the clone uses a read-only token for the task's repo only; else WORKSPACE_GIT_TOKEN.
+  const app = githubAppFromEnv(env);
   const cloneToken = env.WORKSPACE_GIT_TOKEN;
   return new K8sWorkspace({
     kubeConfig,
@@ -496,7 +499,7 @@ export function fromEnv(env: Env): K8sWorkspace {
     image: required(env, "WORKER_IMAGE"),
     storageSize: env.WORKSPACE_STORAGE ?? "10Gi",
     storageClassName: env.WORKSPACE_STORAGE_CLASS ?? null,
-    cloneToken: async () => cloneToken ?? null,
+    cloneToken: async (repo) => (app ? (await app.taskToken([repo], { contents: "read", metadata: "read" })).token : (cloneToken ?? null)),
     resources: {
       cpu: env.WORKSPACE_CPU ?? "500m",
       memory: env.WORKSPACE_MEMORY ?? "2Gi",

@@ -417,6 +417,9 @@ importers:
       '@openfactory/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@openfactory/github':
+        specifier: workspace:*
+        version: link:../github
     devDependencies:
       '@openfactory/agent-acp':
         specifier: workspace:*

@@ -11,6 +11,10 @@ export type Check = { name: string; ok: boolean; detail: string; fix: string | n
 export type HealthDeps = {
   /** GET a code-host path with the factory's token (e.g. "/user", "/repos/o/n"). Throws on non-2xx. */
   forgeGet: (path: string) => Promise<unknown>;
+  /** Who the factory is on the code host (a login, or "<app>[bot]"). Throws when the credential is refused. */
+  identity: () => Promise<string>;
+  /** How agents get their push token: a GitHub App (scoped, 1 h), a Secrets provider, or the server's own token. */
+  pushTokens: "app" | "secrets" | "shared";
   repos: RepoRef[];
   /** OpenAI-compatible gateway base URL (".../v1") and the key tasks and the foreman use. Null: no gateway. */
   gateway: { baseUrl: string; key: string } | null;
@@ -26,6 +30,8 @@ export class Health {
   private last: { at: string; checks: Check[] } | null = null;
   private available: Set<string> | null = null;
   private running: Promise<Check[]> | null = null;
+  /** A hung code host must not hold up start-up: every code-host call here gives up after 10 s. */
+  private readonly calls: Pick<HealthDeps, "forgeGet" | "identity"> = { forgeGet: (p) => within(this.d.forgeGet(p)), identity: () => within(this.d.identity()) };
 
   constructor(private readonly d: HealthDeps) {}
 
@@ -49,7 +55,7 @@ export class Health {
   }
 
   private async runAll(): Promise<Check[]> {
-    const checks = [await this.forge(), ...(await this.forgeRepos()), await this.gateway()];
+    const checks = [await this.forge(), this.pushTokenCheck(), ...(await this.forgeRepos()), await this.gateway()];
     checks.push(this.allModels());
     this.last = { at: (this.d.now?.() ?? new Date()).toISOString(), checks };
     return checks;
@@ -57,11 +63,20 @@ export class Health {
 
   private async forge(): Promise<Check> {
     try {
-      const u = (await this.d.forgeGet("/user")) as { login?: string };
-      return { name: "code host", ok: true, detail: `signed in as ${u.login ?? "?"}`, fix: null };
+      return { name: "code host", ok: true, detail: `signed in as ${await this.calls.identity()}`, fix: null };
     } catch (e) {
-      return { name: "code host", ok: false, detail: `the token was refused: ${short(e)}`, fix: "Give the factory a valid code-host token (Secret github / GITHUB_TOKEN)." };
+      return { name: "code host", ok: false, detail: `the credential was refused: ${short(e)}`, fix: "Check the GitHub App (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, installed on the repos) or the token in GITHUB_TOKEN." };
     }
+  }
+
+  /** Not a blocker, but said plainly: with a shared token, a token leaked from a sandbox reaches every repo the factory can. */
+  private pushTokenCheck(): Check {
+    const detail = {
+      app: "each task gets a GitHub App token for its own repos, valid 1 hour",
+      secrets: "each task gets a token from the secrets provider",
+      shared: "agents get the factory's own token, not a per-task one. Keep it limited to the factory's repos, or set up a GitHub App",
+    }[this.d.pushTokens];
+    return { name: "agent push tokens", ok: true, detail, fix: null };
   }
 
   private async forgeRepos(): Promise<Check[]> {
@@ -69,7 +84,7 @@ export class Health {
       this.d.repos.map(async (r): Promise<Check> => {
         const name = `repo ${r.owner}/${r.name}`;
         try {
-          const repo = (await this.d.forgeGet(`/repos/${r.owner}/${r.name}`)) as { permissions?: { push?: boolean } };
+          const repo = (await this.calls.forgeGet(`/repos/${r.owner}/${r.name}`)) as { permissions?: { push?: boolean } };
           if (repo.permissions && repo.permissions.push === false)
             return { name, ok: false, detail: "the token can read it but not push", fix: `Give the token Contents, Issues and Pull requests write access to ${r.owner}/${r.name}.` };
           return { name, ok: true, detail: "reachable", fix: null };
@@ -113,6 +128,16 @@ export class Health {
     if (bad.length === 0) return { name: "models", ok: true, detail: `${new Set(this.d.models).size} routed models available`, fix: null };
     return { name: "models", ok: false, detail: bad.map((b) => `${b.name.slice("model ".length)}: ${b.detail}`).join("; "), fix: bad.map((b) => b.fix).join(" ") };
   }
+}
+
+const TIMEOUT_MS = 10_000;
+
+function within<T>(p: Promise<T>, ms = TIMEOUT_MS): Promise<T> {
+  let t: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    t = setTimeout(() => reject(new Error(`no answer in ${ms / 1000} s`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(t));
 }
 
 function short(e: unknown): string {

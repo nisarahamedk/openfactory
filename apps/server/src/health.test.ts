@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TaskRecord } from "@openfactory/contracts";
 import { Health } from "./health.js";
 
@@ -9,7 +9,9 @@ const task = (model: string) => ({ harness: { name: "claude-code", model } }) as
 describe("start-up checks", () => {
   it("pass when the token, repos, gateway and routed models are all there", async () => {
     const h = new Health({
-      forgeGet: async (p) => (p === "/user" ? { login: "bot" } : { permissions: { push: true } }),
+      forgeGet: async () => ({ permissions: { push: true } }),
+      identity: async () => "acme-factory[bot]",
+      pushTokens: "app",
       repos,
       gateway: { baseUrl: "http://gw/v1", key: "k" },
       models: ["claude-haiku", "claude-sonnet"],
@@ -18,12 +20,14 @@ describe("start-up checks", () => {
     });
     const r = await h.current();
     expect(r.ok).toBe(true);
-    expect(r.checks.map((c) => c.name)).toEqual(["code host", "repo acme/app", "model gateway", "models"]);
+    expect(r.checks.map((c) => c.name)).toEqual(["code host", "agent push tokens", "repo acme/app", "model gateway", "models"]);
   });
 
   it("catch the live failure: a routed model the gateway key can't use, with a fix, and stop a task routed to it", async () => {
     const h = new Health({
-      forgeGet: async (p) => (p === "/user" ? { login: "bot" } : { permissions: { push: false } }),
+      forgeGet: async () => ({ permissions: { push: false } }),
+      identity: async () => "bot",
+      pushTokens: "shared",
       repos,
       gateway: { baseUrl: "http://gw/v1", key: "k" },
       models: ["claude-haiku", "claude-sonnet"],
@@ -41,9 +45,11 @@ describe("start-up checks", () => {
 
   it("report a refused token or an unreachable gateway", async () => {
     const h = new Health({
-      forgeGet: async () => {
+      forgeGet: async () => ({}),
+      identity: async () => {
         throw new Error("GitHub GET /user → 401: Bad credentials");
       },
+      pushTokens: "shared",
       repos: [],
       gateway: { baseUrl: "http://gw/v1", key: "k" },
       models: [],
@@ -53,4 +59,18 @@ describe("start-up checks", () => {
     const r = await h.current();
     expect(r.checks.filter((c) => !c.ok).map((c) => c.name)).toEqual(["code host", "model gateway"]);
   });
+});
+
+it("a hung code host doesn't hold up the checks", async () => {
+  vi.useFakeTimers();
+  const h = new Health({ forgeGet: () => new Promise(() => {}), identity: () => new Promise(() => {}), pushTokens: "shared", repos, gateway: null, models: [], taskKeyModels: null });
+  const run = h.run();
+  await vi.advanceTimersByTimeAsync(10_001); // the identity check
+  await vi.advanceTimersByTimeAsync(10_001); // then the repo checks
+  const checks = await run;
+  vi.useRealTimers();
+  expect(checks.filter((c) => !c.ok).map((c) => [c.name, c.detail])).toEqual([
+    ["code host", "the credential was refused: no answer in 10 s"],
+    ["repo acme/app", "not reachable: no answer in 10 s"],
+  ]);
 });
