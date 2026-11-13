@@ -88,6 +88,7 @@ async function main() {
         ? {
             forTask: (taskId: string) => p.modelGateway!.forTask(taskId as TaskId, { usd: cfg.MAX_TASK_USD }),
             revoke: (taskId: string) => p.modelGateway!.revoke(taskId as TaskId),
+            spend: async (taskId: string) => (await p.modelGateway!.spend(taskId as TaskId))?.usd ?? null,
           }
         : null,
       scorers: factScorers,

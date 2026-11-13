@@ -21,6 +21,8 @@ export interface EvidenceStore {
 export interface ModelKeys {
   forTask(taskId: string): Promise<Record<string, string>>;
   revoke(taskId: string): Promise<void>;
+  /** What the task's key has spent so far, as the gateway bills it (the ground truth for cost). */
+  spend?(taskId: string): Promise<number | null>;
 }
 
 export type Log = (msg: string, fields?: Record<string, unknown>) => void;
