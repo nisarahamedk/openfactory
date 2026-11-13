@@ -74,6 +74,9 @@ importers:
       '@openfactory/metrics-dxfake':
         specifier: workspace:*
         version: link:../../plugins/metrics-dxfake
+      '@openfactory/models-litellm':
+        specifier: workspace:*
+        version: link:../../plugins/models-litellm
       '@openfactory/rules':
         specifier: workspace:*
         version: link:../../packages/rules
@@ -258,6 +261,33 @@ importers:
       zod:
         specifier: 4.1.12
         version: 4.1.12
+
+  plugins/models-litellm:
+    dependencies:
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+
+  plugins/secrets-infisical:
+    dependencies:
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+
+  plugins/secrets-k8s:
+    dependencies:
+      '@kubernetes/client-node':
+        specifier: 1.4.0
+        version: 1.4.0(bare-buffer@3.7.2)
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
 
   plugins/workspace-k8s:
     dependencies:

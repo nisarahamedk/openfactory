@@ -21,6 +21,7 @@
     "@openfactory/foreman": "workspace:*",
     "@openfactory/ledger": "workspace:*",
     "@openfactory/metrics-dxfake": "workspace:*",
+    "@openfactory/models-litellm": "workspace:*",
     "@openfactory/rules": "workspace:*",
     "@openfactory/scoring": "workspace:*",
     "@openfactory/task-job": "workspace:*",

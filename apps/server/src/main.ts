@@ -15,7 +15,7 @@ import { factScorers } from "@openfactory/scoring";
 import { TaskJobs } from "@openfactory/task-job";
 import { fileEvidenceStore, createApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { liteLlmModelKeys } from "./model-keys.js";
+import { LiteLlmGateway } from "@openfactory/models-litellm";
 import { loadAgent, loadEnvironment, loadWorkspace } from "./plugins.js";
 
 const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), msg, ...fields }));
@@ -63,16 +63,19 @@ async function main() {
       environment,
       evidence,
       pusher: new GitHubBundlePusher({ token: () => cfg.GITHUB_TOKEN }),
-      modelKeys:
-        cfg.LITELLM_ADMIN_URL && cfg.LITELLM_MASTER_KEY
-          ? liteLlmModelKeys({
-              adminUrl: cfg.LITELLM_ADMIN_URL,
-              masterKey: cfg.LITELLM_MASTER_KEY,
-              maxBudgetUsd: cfg.MAX_TASK_USD,
-              models: cfg.TASK_KEY_MODELS.split(",").map((m) => m.trim()),
-              envNames: { key: "ANTHROPIC_API_KEY" },
-            })
-          : null,
+      modelKeys: (() => {
+        if (!cfg.LITELLM_ADMIN_URL || !cfg.LITELLM_MASTER_KEY) return null;
+        const gateway = new LiteLlmGateway({
+          adminUrl: cfg.LITELLM_ADMIN_URL,
+          masterKey: cfg.LITELLM_MASTER_KEY,
+          agentBaseUrl: cfg.LITELLM_ADMIN_URL,
+          models: cfg.TASK_KEY_MODELS.split(",").map((m) => m.trim()),
+          // The agent's base URL comes from AGENT_ENV_JSON; the gateway only adds the task's key.
+          envNames: { baseUrl: null, key: "ANTHROPIC_API_KEY" },
+          fetch,
+        });
+        return { forTask: (taskId: string) => gateway.forTask(taskId, { usd: cfg.MAX_TASK_USD }), revoke: (taskId: string) => gateway.revoke(taskId) };
+      })(),
       scorers: factScorers,
       sinks,
       config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/" },
