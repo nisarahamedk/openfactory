@@ -6,6 +6,8 @@
  *   /v1/...                          benchmark routes (packages/bench)
  *   POST /webhooks/github            GitHub webhooks (optional; polling is the default)
  *   GET  /evidence/:taskId/:file     evidence copied out of sandboxes, linked from PRs
+ *   GET  /v1/openapi.json            OpenAPI 3.1 for /v1 (generated from the Zod contracts)
+ *   POST /mcp                        the factory's MCP server (Streamable HTTP), same bearer token as /v1
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,6 +15,8 @@ import { Signal, TaskId, TaskStatus } from "@openfactory/contracts";
 import type { Ledger } from "@openfactory/ledger";
 import type { EvidenceStore } from "@openfactory/task-job";
 import { Hono } from "hono";
+import { buildOpenApi, FactoryApi } from "@openfactory/client";
+import { createMcpHttpHandler } from "@openfactory/mcp";
 
 const SAFE = /^[A-Za-z0-9._-]{1,200}$/;
 
@@ -45,6 +49,8 @@ export type AppDeps = {
   apiToken: string | undefined;
   webhook: ((headers: { event: string | null; delivery: string | null; signature: string | null }, body: string) => Promise<Signal | null>) | null;
   bench: Hono | null;
+  /** Public base URL, used in the OpenAPI document's `servers`. */
+  publicUrl: string | null;
   log: (m: string, f?: object) => void;
 };
 
@@ -57,10 +63,13 @@ export function createApp(d: AppDeps): Hono {
   app.get("/healthz", (c) => c.json({ ok: true }));
 
   const v1 = new Hono();
-  v1.use("*", async (c, next) => {
+  const requireToken = async (c: { req: { header(n: string): string | undefined }; json(b: unknown, s: 401): Response }, next: () => Promise<void>) => {
     if (d.apiToken && c.req.header("authorization") !== `Bearer ${d.apiToken}`) return c.json({ code: "UNAUTHORIZED", message: "bearer token required" }, 401);
     await next();
-  });
+  };
+  v1.use("*", requireToken);
+  const openapi = buildOpenApi({ serverUrl: d.publicUrl, version: "0.0.1" });
+  v1.get("/openapi.json", (c) => c.json(openapi));
   v1.get("/tasks", async (c) => {
     const status = c.req.query("status");
     const limit = Number(c.req.query("limit") ?? 100);
@@ -85,6 +94,12 @@ export function createApp(d: AppDeps): Hono {
   });
   if (d.bench) v1.route("/", d.bench);
   app.route("/v1", v1);
+
+  // MCP tools call /v1 in-process with the same token, so they can never do more than the API allows.
+  const self = new FactoryApi({ baseUrl: "http://in-process", token: d.apiToken ?? null, fetch: (input, init) => Promise.resolve(app.fetch(new Request(input, init))) });
+  const mcp = createMcpHttpHandler(self, { version: "0.0.1" });
+  app.use("/mcp", requireToken);
+  app.all("/mcp", (c) => mcp(c.req.raw));
 
   if (d.webhook) {
     const parse = d.webhook;

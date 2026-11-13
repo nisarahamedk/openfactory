@@ -136,6 +136,7 @@ async function main() {
     apiToken: cfg.FACTORY_API_TOKEN,
     webhook: cfg.GITHUB_WEBHOOK_SECRET && cfg.SIGNALS !== "poll" ? (h, b) => parseWebhook(cfg.GITHUB_WEBHOOK_SECRET!, h, b) : null,
     bench,
+    publicUrl: cfg.PUBLIC_URL,
     log,
   });
   const server = serve({ fetch: app.fetch, port: cfg.PORT }, (i) => log("listening", { port: i.port }));
