@@ -113,6 +113,9 @@ importers:
       '@openfactory/workspace-local':
         specifier: workspace:*
         version: link:../../plugins/workspace-local
+      '@openfactory/world-openworld':
+        specifier: workspace:*
+        version: link:../../plugins/world-openworld
       hono:
         specifier: 4.10.4
         version: 4.10.4
@@ -437,6 +440,15 @@ importers:
       vitest:
         specifier: 3.2.4
         version: 3.2.4(@types/node@24.19.2)(yaml@2.9.1)
+
+  plugins/world-openworld:
+    dependencies:
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
 
 packages:
 

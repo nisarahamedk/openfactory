@@ -41,6 +41,7 @@ const ALIASES: Record<string, string> = {
   "secrets:k8s": "@openfactory/secrets-k8s",
   disk: "@openfactory/evidence-disk",
   s3: "@openfactory/evidence-s3",
+  openworld: "@openfactory/world-openworld",
 };
 
 export type Selection = { name: string; options: Record<string, unknown> };
