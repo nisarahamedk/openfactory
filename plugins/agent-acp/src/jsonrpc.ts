@@ -10,11 +10,13 @@ const RpcId = z.union([z.string(), z.number()]);
 
 const RpcError = z.object({ code: z.number(), message: z.string(), data: z.unknown().optional() });
 
+// Order matters: an error response must not be read as a success, and
+// `z.unknown()` would accept a missing `result`.
 const IncomingMessage = z.union([
   z.object({ jsonrpc: z.literal("2.0"), id: RpcId, method: z.string(), params: z.unknown().optional() }),
   z.object({ jsonrpc: z.literal("2.0"), method: z.string(), params: z.unknown().optional() }),
-  z.object({ jsonrpc: z.literal("2.0"), id: RpcId, result: z.unknown() }),
   z.object({ jsonrpc: z.literal("2.0"), id: RpcId.nullable(), error: RpcError }),
+  z.object({ jsonrpc: z.literal("2.0"), id: RpcId, result: z.unknown() }).refine((m) => "result" in m),
 ]);
 
 /** The other side answered a request with a JSON-RPC error. */

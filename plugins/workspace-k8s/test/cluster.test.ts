@@ -89,11 +89,12 @@ test.runIf(run)("worker path on a real cluster: env, workspace, agent, sleep, wa
     const t2 = await s2.prompt("ROUND2", () => undefined);
     await s2.close();
     await mock2.kill();
-    if (!t2.summary.includes("remembered ROUND1")) {
-      console.log((await ws.exec(["cat", "/work/mock/requests.log"])).stdout);
-    }
     expect(t2.summary).toContain("remembered ROUND1");
     expect((await ws.exec(["cat", "round.txt"])).stdout).toBe("r1\nr2\n");
+  } catch (error) {
+    // Show what the model saw, so a failure in the pod can be read from the job log.
+    console.log("mock requests:\n" + (await ws.exec(["sh", "-c", "cat /work/mock/requests.log 2>&1; ls -la /work/home/.claude/projects/* 2>&1"])).stdout);
+    throw error;
   } finally {
     if (env.ITEST_KEEP !== "1") {
       await ws.destroy();
