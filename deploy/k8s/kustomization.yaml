@@ -1,0 +1,32 @@
+# kubectl apply -k deploy/k8s
+# Set the VM IP (dashed form) and image tag below; everything else is fixed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - storage.yaml
+  - rbac.yaml
+  - server.yaml
+  - dashboard.yaml
+  - dxfake.yaml
+  - ingress.yaml
+images:
+  - name: openfactory
+    newName: ghcr.io/nisarahamedk/openfactory
+    newTag: latest # set to the commit SHA the workflow built
+configMapGenerator:
+  - name: factory-ip
+    namespace: factory
+    literals:
+      - VM_IP=0-0-0-0 # ← the VM's IP with dashes, e.g. 5-75-1-2
+generatorOptions:
+  disableNameSuffixHash: true
+replacements:
+  - source: { kind: ConfigMap, name: factory-ip, fieldPath: data.VM_IP }
+    targets:
+      - select: { kind: Ingress, name: factory }
+        fieldPaths: [spec.rules.*.host]
+        options: { delimiter: ".", index: 1 }
+      - select: { kind: Deployment, name: openfactory }
+        fieldPaths: ["spec.template.spec.containers.[name=server].env.[name=PUBLIC_URL].value"]
+        options: { delimiter: ".", index: 1 }

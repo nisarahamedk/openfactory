@@ -1,0 +1,54 @@
+# Factory server. Non-secret config inline; secrets from k8s Secrets that infra creates:
+#   postgres (DATABASE_URL), github (GITHUB_TOKEN), litellm (LITELLM_FACTORY_KEY), dxfake (DXFAKE_TOKEN),
+#   factory-api (FACTORY_API_TOKEN: /v1 is public via the ingress, so it must be set).
+# Full list of variables: apps/server/src/config.ts.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openfactory
+  namespace: factory
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: openfactory } }
+  template:
+    metadata: { labels: { app: openfactory } }
+    spec:
+      serviceAccountName: openfactory
+      containers:
+        - name: server
+          image: openfactory
+          imagePullPolicy: IfNotPresent
+          args: ["apps/server/dist/main.js"]
+          ports: [{ containerPort: 3000, name: http }]
+          env:
+            - { name: PORT, value: "3000" }
+            - { name: PUBLIC_URL, value: "https://factory.VM_IP.sslip.io" }
+            - { name: DATA_DIR, value: /data }
+            - { name: BENCH_DIR, value: /data/bench }
+            - { name: FACTORY_REPOS, value: nisarahamedk/firstword }
+            - { name: MODEL_PROXY_URL, value: "http://litellm.factory.svc:4000/v1" }
+            - { name: FOREMAN_MODEL, value: claude-haiku }
+            - { name: WORKER_MODEL, value: claude-sonnet }
+            - { name: DXFAKE_URL, value: "http://dxfake.factory.svc:8787" }
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: postgres, key: DATABASE_URL } }
+            - name: GITHUB_TOKEN
+              valueFrom: { secretKeyRef: { name: github, key: GITHUB_TOKEN } }
+            - name: MODEL_PROXY_KEY
+              valueFrom: { secretKeyRef: { name: litellm, key: LITELLM_FACTORY_KEY } }
+            - name: DXFAKE_TOKEN
+              valueFrom: { secretKeyRef: { name: dxfake, key: DXFAKE_TOKEN } }
+            - name: FACTORY_API_TOKEN
+              valueFrom: { secretKeyRef: { name: factory-api, key: FACTORY_API_TOKEN } }
+          volumeMounts: [{ name: data, mountPath: /data, subPath: server }]
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: factory-data } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: openfactory, namespace: factory }
+spec:
+  selector: { app: openfactory }
+  ports: [{ port: 3000, targetPort: http, name: http }]

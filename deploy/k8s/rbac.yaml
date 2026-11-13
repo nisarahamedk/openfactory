@@ -1,0 +1,44 @@
+# The server creates a namespace, sandbox pod and short-lived kubeconfig per task
+# (workspace + environment plugins), so it needs cluster-wide rights over those kinds.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openfactory
+  namespace: factory
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openfactory
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, pods, pods/exec, pods/log, pods/attach, services, configmaps, secrets, serviceaccounts, serviceaccounts/token, persistentvolumeclaims, resourcequotas, limitranges]
+    verbs: ["*"]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: ["*"]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: ["*"]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: ["*"]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: ["*"]
+  - apiGroups: [agents.x-k8s.io, extensions.agents.x-k8s.io]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openfactory
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openfactory
+subjects:
+  - kind: ServiceAccount
+    name: openfactory
+    namespace: factory

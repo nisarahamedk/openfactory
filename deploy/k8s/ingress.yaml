@@ -1,0 +1,19 @@
+# Hosts are <name>.<VM_IP>.sslip.io. The IP part ("VM_IP") is filled in by kustomize
+# from the factory-ip ConfigMap (kustomization.yaml); use the dashed form, e.g. 5-75-1-2.
+# TLS: Traefik's ACME resolver "le" on k3s (no cert-manager).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: factory
+  namespace: factory
+  annotations:
+    traefik.ingress.kubernetes.io/router.tls.certresolver: le
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: factory.VM_IP.sslip.io
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: openfactory, port: { number: 3000 } } } }] }
+    - host: dashboard.VM_IP.sslip.io
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: dashboard, port: { number: 8080 } } } }] }
+    - host: dx.VM_IP.sslip.io
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: dxfake, port: { number: 8787 } } } }] }

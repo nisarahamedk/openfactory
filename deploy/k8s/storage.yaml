@@ -1,0 +1,13 @@
+# One volume for factory files: benchmark suite (/data/bench) and fake DX data (/data/dx).
+# ReadWriteOnce is fine on a single-node k3s: pods on the same node share it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: factory-data
+  namespace: factory
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi

@@ -1,0 +1,35 @@
+# Dashboard. Secret "dashboard": DASHBOARD_PASSWORD (basic auth, user "factory").
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: factory
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: dashboard } }
+  template:
+    metadata: { labels: { app: dashboard } }
+    spec:
+      containers:
+        - name: dashboard
+          image: openfactory
+          imagePullPolicy: IfNotPresent
+          args: ["apps/dashboard/dist/main.js"]
+          ports: [{ containerPort: 8080, name: http }]
+          env:
+            - { name: DASHBOARD_PORT, value: "8080" }
+            - { name: FACTORY_API_URL, value: "http://openfactory.factory.svc:3000" }
+            - { name: DASHBOARD_MODELS, value: "claude-haiku,claude-sonnet" }
+            - name: FACTORY_API_TOKEN
+              valueFrom: { secretKeyRef: { name: factory-api, key: FACTORY_API_TOKEN } }
+            - name: DASHBOARD_PASSWORD
+              valueFrom: { secretKeyRef: { name: dashboard, key: DASHBOARD_PASSWORD } }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 256Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: dashboard, namespace: factory }
+spec:
+  selector: { app: dashboard }
+  ports: [{ port: 8080, targetPort: http, name: http }]
