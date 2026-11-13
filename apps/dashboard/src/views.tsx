@@ -2,13 +2,35 @@ import type { Child } from "hono/jsx";
 import type { BenchmarkTask, Evidence, LedgerEvent, Team, TaskRecord, TaskStatus } from "@openfactory/contracts";
 import type { BenchRun } from "@openfactory/bench";
 import type { FactoryInfo, FactoryView } from "@openfactory/client";
-import { formatDuration, latestScores } from "@openfactory/scoring";
+import { formatDuration, latestScores, scorerDocs } from "@openfactory/scoring";
 import { BarChart, PassCostChart, shortDay, TimeChart } from "./charts.js";
 import { isOpen, type DayRow, type InboxItem, type Insights, type RunFilter, type ScorerSummary, type TaskFacts } from "./insights.js";
 import { byFactoryVersion } from "./stats.js";
 import { Badge, Empty, Icon, PageHeader, type Tone } from "./ui.js";
 
 // ───────────────────────────── formatting ─────────────────────────────
+
+/** Ends a free-text reason with a full stop so the sentence after it reads cleanly. */
+export const sentence = (s: string): string => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim()}.`);
+
+/**
+ * Light Markdown for issue text and agent replies: **bold**, `code` and "- " bullets; HTML tags are dropped.
+ * Whitespace is kept by the container (pre-wrap), so line breaks stay as written. Output is escaped JSX, never raw HTML.
+ */
+export function md(text: string): Child[] {
+  const out: Child[] = [];
+  text.replace(/<\/?[a-z][^>]*>/gi, "").split("\n").forEach((line, i) => {
+    if (i > 0) out.push("\n");
+    const bullet = /^(\s*)[-*] (.*)$/.exec(line);
+    if (bullet) out.push(`${bullet[1]}• `);
+    for (const part of (bullet ? bullet[2]! : line).split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/)) {
+      if (part.startsWith("**") && part.endsWith("**") && part.length > 4) out.push(<b>{part.slice(2, -2)}</b>);
+      else if (part.startsWith("`") && part.endsWith("`") && part.length > 2) out.push(<code>{part.slice(1, -1)}</code>);
+      else if (part) out.push(part);
+    }
+  });
+  return out;
+}
 
 export const usd = (n: number | null) => (n === null ? "–" : n >= 1000 ? `$${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : `$${n.toFixed(2)}`);
 export const pct = (n: number | null) => (n === null ? "–" : `${Math.round(n * 100)}%`);
@@ -342,12 +364,12 @@ export function TaskPage({ t, events, facts, now, viewer = null, team = null, fa
       </PageHeader>
 
       {facts.lastError && isOpen(t.status) ? <div class="alert bad"><b>Last error.</b> {facts.lastError}</div> : null}
-      {facts.cancelled ? <div class="alert warn">Stopped{facts.cancelled.by ? ` by ${facts.cancelled.by}` : ""}{facts.cancelled.reason ? `: ${facts.cancelled.reason}` : "."} A new comment on the issue or PR resumes it.</div> : null}
+      {facts.cancelled ? <div class="alert warn">Stopped{facts.cancelled.by ? ` by ${facts.cancelled.by}` : ""}{facts.cancelled.reason ? `: ${sentence(facts.cancelled.reason)}` : "."} A new comment on the issue or PR resumes it.</div> : null}
 
       <div class="readout">
         <div><div class="k">Model cost</div><div class="v">{usd(t.usage.costUsd)}</div><div class="c">{t.usage.inputTokens.toLocaleString()} tokens in, {t.usage.outputTokens.toLocaleString()} out</div></div>
         <div><div class="k">{isOpen(t.status) ? "Running for" : "Ask to done"}</div><div class="v">{dur((Date.parse(end) - Date.parse(t.createdAt)) / 1000)}</div><div class="c">{facts.turns.length} agent turns, {t.people.reviewRounds} review rounds</div></div>
-        <div><div class="k">PR size</div><div class="v">{facts.prSize ? `+${facts.prSize.additions} −${facts.prSize.deletions}` : "–"}</div><div class="c">{facts.prSize ? `${facts.prSize.changedFiles} files${facts.ciOnHead ? `, CI ${facts.ciOnHead === "success" ? "green" : "red"} on head` : ""}` : "No PR yet"}</div></div>
+        <div><div class="k">PR size</div><div class="v">{facts.prSize ? `+${facts.prSize.additions} −${facts.prSize.deletions}` : "–"}</div><div class="c">{facts.prSize ? `${facts.prSize.changedFiles} files${facts.ciOnHead ? `, CI ${facts.ciOnHead === "success" ? "green" : "red"} on head` : ""}` : t.pr ? "Not measured yet" : "No PR yet"}</div></div>
         <div><div class="k">Human commits</div><div class="v">{facts.humanPushes}</div><div class="c">{facts.humanPushes === 0 ? "Fully agent-written" : "Pushed by people between turns"}</div></div>
       </div>
 
@@ -358,9 +380,9 @@ export function TaskPage({ t, events, facts, now, viewer = null, team = null, fa
           <Card>
             <div class="head"><h3>Conversation</h3><span class="muted" style="font-size:12.5px">the ask, the agent's replies and what people wrote</span></div>
             <div class="convo" style="margin-top:8px">
-              <div class="say"><div class="who"><b>{t.requestedBy ?? "asker"}</b>asked</div><div class="txt">{t.ask}</div><div class="at">{when(t.createdAt)}</div></div>
+              <div class="say"><div class="who"><b>{t.requestedBy ?? "asker"}</b>asked</div><div class="txt">{md(t.ask)}</div><div class="at">{when(t.createdAt)}</div></div>
               {conversation(t, events, facts).map((m) => (
-                <div class={`say${m.agent ? " agent" : ""}`}><div class="who"><b>{m.who}</b>{m.role}</div><div class="txt">{m.text}{m.url ? <> <a class="link" href={m.url}>open</a></> : null}</div><div class="at">{when(m.at)}</div></div>
+                <div class={`say${m.agent ? " agent" : ""}`}><div class="who"><b>{m.who}</b>{m.role}</div><div class="txt">{md(m.text)}{m.url ? <> <a class="link" href={m.url}>open</a></> : null}</div><div class="at">{when(m.at)}</div></div>
               ))}
             </div>
             {t.status !== "merged" && t.status !== "closed" ? (
@@ -441,7 +463,7 @@ export function TaskPage({ t, events, facts, now, viewer = null, team = null, fa
             <h3>Scores</h3>
             {scores.length === 0 ? <div class="muted" style="margin-top:8px;font-size:13px">None yet.</div> : (
               <dl class="kv" style="margin-top:12px;grid-template-columns:minmax(0,1fr) auto">
-                {scores.map((s) => <><dt title={s.reason}>{s.scorer.replace("facts.", "")}</dt><dd class="num" style="text-align:right">{s.label ?? s.value}</dd></>)}
+                {scores.map((s) => <><dt title={s.reason ?? scorerDocs[s.scorer]?.measures}>{scorerDocs[s.scorer]?.title ?? s.scorer.replace("facts.", "")}</dt><dd class="num" style="text-align:right">{s.label ?? s.value}</dd></>)}
               </dl>
             )}
           </Card>
