@@ -68,7 +68,7 @@ it("teams, factories, rollouts, saved views and messages", async () => {
     sent.push(`${author}: ${text}`);
     return null;
   });
-  const app = createApp({ ...deps, ledger, onSignal: async () => null, evidence, apiToken: null as unknown as undefined, webhook: null, bench: null, factory: async () => { throw new Error("unused"); }, cancel: async () => null, publicUrl: null, log: () => {} });
+  const app = createApp({ ...deps, ledger, onSignal: async () => null, evidence, apiToken: undefined, webhook: null, bench: null, factory: async () => { throw new Error("unused"); }, cancel: async () => null, publicUrl: null, log: () => {} });
   const post = (path: string, body: unknown) => app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
   expect((await (await app.request("/v1/teams")).json()).teams.map((t: { slug: string }) => t.slug)).toEqual(["core", "payments"]);
@@ -96,4 +96,15 @@ it("teams, factories, rollouts, saved views and messages", async () => {
 
   expect((await post("/v1/tasks/task_zz/messages", { author: "dana", text: "hi" })).status).toBe(404);
   expect(sent).toEqual(["dana: hi"]);
+});
+
+it("asks for a new task", async () => {
+  const ledger = new Ledger(drizzle(new PGlite()));
+  await ledger.migrate();
+  const app = createApp({ ...(await orgDeps()), ledger, onSignal: async () => null, evidence: fileEvidenceStore(mkdtempSync(join(tmpdir(), "ev-")), "https://f.example"), apiToken: undefined, webhook: null, bench: null, factory: async () => { throw new Error("unused"); }, cancel: async () => null, publicUrl: null, log: () => {} });
+  const post = (body: unknown) => app.request("/v1/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  expect((await (await post({ ask: "Add CSV export", requestedBy: "dana" })).json()).issueNumber).toBe(9);
+  const bad = await post({ ask: "x y z", repo: "o/none", requestedBy: "dana" });
+  expect(bad.status).toBe(400);
+  expect((await bad.json()).message).toBe("not a factory repo");
 });
