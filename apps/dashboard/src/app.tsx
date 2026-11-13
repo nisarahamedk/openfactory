@@ -5,7 +5,7 @@ import { basicAuth } from "hono/basic-auth";
 import { getCookie, setCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-import { TaskId, ViewShare, type LedgerEvent, type SavedView, type Team, type TaskRecord } from "@openfactory/contracts";
+import { factoryFor, TaskId, teamFor, ViewShare, type LedgerEvent, type SavedView, type Team, type TaskRecord } from "@openfactory/contracts";
 import { FactoryApiError, type FactoryApi, type FactoryInfo } from "@openfactory/client";
 import type { Child } from "hono/jsx";
 import { dailySeries, inbox, insights, isOpen, taskFacts, type TaskFacts } from "./insights.js";
@@ -236,7 +236,7 @@ export function createDashboard(
     if (!id.success || t === null) return c.html(await page(c, { title: "Not found", nav: "tasks", flash: null }, <ErrorPage message="No such task." />), 404);
     const [events, teams, fs] = await Promise.all([cache.events(t), teamsOf(), factoriesOf()]);
     const live = isOpen(t.status) && t.status !== "awaiting_review";
-    const team = teams.find((x) => x.members.some((m) => m.login === t.requestedBy)) ?? teams.find((x) => x.repos.includes(`${t.source.repo.owner}/${t.source.repo.name}`)) ?? null;
+    const team = teamFor(teams, { requestedBy: t.requestedBy, repo: t.source.repo });
     const fa = fs.factories.find((x) => x.slug === (team?.factory ?? "default")) ?? null;
     return c.html(await page(c, { title: t.title, nav: "tasks", refreshSec: live ? 15 : undefined }, <TaskPage t={t} events={events} facts={taskFacts(t, events)} now={now()} viewer={viewerOf(c)} team={team} factory={fa} />));
   });
@@ -462,11 +462,6 @@ export function createDashboard(
   return app;
 }
 
-/** The factory a task ran on: its asker's team's factory, else its repo's team's, else the default. */
-function factorySlugOf(t: TaskRecord, teams: readonly Team[]): string {
-  const byPerson = teams.find((x) => x.members.some((m) => m.login === t.requestedBy));
-  const byRepo = teams.find((x) => x.repos.includes(`${t.source.repo.owner}/${t.source.repo.name}`));
-  return (byPerson ?? byRepo)?.factory ?? "default";
-}
+const factorySlugOf = (t: TaskRecord, teams: readonly Team[]) => factoryFor(teams, { requestedBy: t.requestedBy, repo: t.source.repo });
 
 export { filterQuery, scopeParam };

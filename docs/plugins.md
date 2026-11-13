@@ -46,8 +46,10 @@ Status: **Decided** by Nisar on 2026-11-13. Migration steps 1 and 3 are done (re
 | Metrics | rows to org dashboards | CDEvents (check adoption first) | DX, DevLake | `MetricsSink` |
 | OutcomeSource | outcomes after the merge | polled (`poll(mergedTasks)`), webhooks later | Rootly, PagerDuty, Datadog monitors, reverts | `github` (reverts, follow-up fixes), `dxfake` (incidents, deploys); polled every 10 min for 30 days |
 | Benchmark | capture and replay tasks | **Harbor** task format | Harbor folders | `packages/bench`, not swappable |
-| Rollout | canary and 10% routing of factory versions | OpenFeature (check adoption first) | any flag service, built-in random | missing |
-| Identity | the same person across tools; who may start a task | **OIDC/SAML**, **SCIM** | Okta, Entra, Google | missing |
+| Rollout | canary and 10% routing of factory versions | OpenFeature (check adoption first) | any flag service, built-in random | built in: the app's rollout (Postgres `of_rollouts`, set on Factories › a factory) overrides factory.yaml `rollout:`; stable hash of the signal id picks the arm |
+| Identity | the same person across tools; who may start a task | **OIDC/SAML**, **SCIM** | Okta, Entra, Google | missing (the app asks who you are; SSO replaces that) |
+| Directory | teams, their people and repos; which factory a team runs on | **SCIM** groups where available | GitHub org teams, SCIM, factory.yaml | `Directory`: `github` (org teams), factory.yaml `teams:` list, else one inferred team; `factoryFor(teams, task)` in contracts |
+| WorldCheck | run a PR head N simulated days in a world, report invariants | (none) | OpenWorld runner | `world-openworld` (the HTTP runner protocol is documented at the top of its src/index.ts); the runner itself is not built yet |
 | ReviewRouter | pick reviewers and approvers | (none) | CODEOWNERS, on-call rota | missing |
 | Knowledge | context the agent gets | **MCP** | repo docs, Confluence, skill files | env skill file only |
 | Policy | org rules added on top of the core rules | OPA (optional) | rules file, OPA | missing |
