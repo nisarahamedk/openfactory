@@ -309,6 +309,45 @@ export interface LedgerReader {
   events(id: TaskId): Promise<LedgerEvent[]>;
 }
 
+// ───────────────────────────── providers ─────────────────────────────
+
+/** The environment the agent deploys to and tests against (the plugins doc's name for `Environment`). */
+export type DevEnvironment = Environment;
+
+/** Every pluggable abstraction, by the key used in factory.yaml `providers:`. Rules, ledger and task job are core. */
+export type Abstractions = {
+  codeForge: CodeForge;
+  signals: SignalSource;
+  chat: Chat;
+  agent: AgentHarness;
+  workspace: Workspace;
+  devEnvironment: Environment;
+  metrics: MetricsSink;
+};
+export type AbstractionKey = keyof Abstractions;
+export const ABSTRACTION_KEYS = ["codeForge", "signals", "chat", "agent", "workspace", "devEnvironment", "metrics"] as const satisfies readonly AbstractionKey[];
+
+export interface ProviderContext {
+  /** Options for this provider from factory.yaml (`codeForge: { github: { ... } }`), or {} . */
+  options: Record<string, unknown>;
+  /** Process env, for secrets and env-var fallbacks. Providers read their own variables. */
+  env: Record<string, string | undefined>;
+  log: (msg: string, fields?: Record<string, unknown>) => void;
+}
+
+/**
+ * A provider package exports `provider: Provider`. One provider may implement several abstractions
+ * (the github provider gives codeForge, signals and chat). It is named after the vendor or protocol.
+ */
+export interface Provider {
+  readonly name: string;
+  readonly provides: { [K in AbstractionKey]?: (ctx: ProviderContext) => Abstractions[K] | Promise<Abstractions[K]> };
+}
+
+export function defineProvider(p: Provider): Provider {
+  return p;
+}
+
 // ───────────────────────────── benchmarks ─────────────────────────────
 
 /** A task captured from real work, replayable under any factory version. */
