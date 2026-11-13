@@ -1,7 +1,7 @@
 import type { Child } from "hono/jsx";
-import type { BenchmarkTask, LedgerEvent, TaskRecord, TaskStatus } from "@openfactory/contracts";
+import type { BenchmarkTask, Evidence, LedgerEvent, Team, TaskRecord, TaskStatus } from "@openfactory/contracts";
 import type { BenchRun } from "@openfactory/bench";
-import type { FactoryInfo } from "@openfactory/client";
+import type { FactoryInfo, FactoryView } from "@openfactory/client";
 import { formatDuration, latestScores } from "@openfactory/scoring";
 import { BarChart, PassCostChart, shortDay, TimeChart } from "./charts.js";
 import { isOpen, type DayRow, type InboxItem, type Insights, type RunFilter, type ScorerSummary, type TaskFacts } from "./insights.js";
@@ -11,12 +11,12 @@ import { Badge, Empty, Icon, PageHeader, type Tone } from "./ui.js";
 // ───────────────────────────── formatting ─────────────────────────────
 
 export const usd = (n: number | null) => (n === null ? "–" : n >= 1000 ? `$${n.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : `$${n.toFixed(2)}`);
-const pct = (n: number | null) => (n === null ? "–" : `${Math.round(n * 100)}%`);
+export const pct = (n: number | null) => (n === null ? "–" : `${Math.round(n * 100)}%`);
 const num = (n: number | null, d = 1) => (n === null ? "–" : n.toFixed(d));
 const dur = (s: number | null) => (s === null ? "–" : formatDuration(s));
-const when = (iso: string) => `${shortDay(iso)}, ${iso.slice(11, 16)}`;
+export const when = (iso: string) => `${shortDay(iso)}, ${iso.slice(11, 16)}`;
 
-function ago(iso: string, now: string): string {
+export function ago(iso: string, now: string): string {
   const s = Math.max(0, (Date.parse(now) - Date.parse(iso)) / 1000);
   if (s < 60) return "just now";
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
@@ -24,7 +24,7 @@ function ago(iso: string, now: string): string {
   return `${Math.floor(s / 86_400)}d ago`;
 }
 
-const STATUS: Record<TaskStatus, { label: string; tone: Tone }> = {
+export const STATUS: Record<TaskStatus, { label: string; tone: Tone }> = {
   received: { label: "Queued", tone: "neutral" },
   preparing: { label: "Preparing", tone: "info" },
   working: { label: "Working", tone: "info" },
@@ -319,15 +319,15 @@ function RunsTable({ tasks, facts, now }: { tasks: TaskRecord[]; facts: Map<stri
 
 // ───────────────────────────── run detail ─────────────────────────────
 
-export function TaskPage({ t, events, facts, now }: { t: TaskRecord; events: LedgerEvent[]; facts: TaskFacts; now: string }) {
+export function TaskPage({ t, events, facts, now, viewer = null, team = null, factory = null }: { t: TaskRecord; events: LedgerEvent[]; facts: TaskFacts; now: string; viewer?: string | null; team?: Team | null; factory?: FactoryView | null }) {
   const scores = [...latestScores(t.scores).values()];
   const end = isOpen(t.status) ? now : t.updatedAt;
   return (
     <>
       <PageHeader
-        crumb={<><a href="/runs">Runs</a> / <span class="mono">{t.id}</span></>}
+        crumb={<><a href="/tasks">Tasks</a> / <span class="mono">{t.id}</span></>}
         title={t.title}
-        sub={<span style="display:inline-flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px"><Status s={t.status} /><span>{t.harness.name} with {t.harness.model}</span><span class="mono">{t.factoryVersion}</span><span>started {when(t.createdAt)}</span></span>}
+        sub={<span style="display:inline-flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px"><Status s={t.status} />{t.requestedBy ? <span>asked by <a class="link" href={`/people/${t.requestedBy}`}>{t.requestedBy}</a></span> : null}<span>{t.harness.name} with {t.harness.model}</span><span class="mono">{t.factoryVersion}{t.versionArm === "candidate" ? " (candidate)" : ""}</span><span>started {when(t.createdAt)}</span></span>}
       >
         {t.pr ? <a class="btn" href={t.pr.url}><Icon name="pr" />PR #{t.pr.number}</a> : null}
         {t.status === "merged" ? (
@@ -351,11 +351,26 @@ export function TaskPage({ t, events, facts, now }: { t: TaskRecord; events: Led
         <div><div class="k">Human commits</div><div class="v">{facts.humanPushes}</div><div class="c">{facts.humanPushes === 0 ? "Fully agent-written" : "Pushed by people between turns"}</div></div>
       </div>
 
+      {t.status === "awaiting_review" || (t.risk && t.pr) ? <ReviewPanel t={t} facts={facts} team={team} factory={factory} /> : null}
+
       <div class="grid detail" style="align-items:start">
         <div class="stack" style="min-width:0">
           <Card>
-            <h3>Ask</h3>
-            <div class="t2" style="margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13.5px">{t.ask}</div>
+            <div class="head"><h3>Conversation</h3><span class="muted" style="font-size:12.5px">the ask, the agent's replies and what people wrote</span></div>
+            <div class="convo" style="margin-top:8px">
+              <div class="say"><div class="who"><b>{t.requestedBy ?? "asker"}</b>asked</div><div class="txt">{t.ask}</div><div class="at">{when(t.createdAt)}</div></div>
+              {conversation(t, events, facts).map((m) => (
+                <div class={`say${m.agent ? " agent" : ""}`}><div class="who"><b>{m.who}</b>{m.role}</div><div class="txt">{m.text}{m.url ? <> <a class="link" href={m.url}>open</a></> : null}</div><div class="at">{when(m.at)}</div></div>
+              ))}
+            </div>
+            {t.status !== "merged" && t.status !== "closed" ? (
+              viewer ? (
+                <form method="post" action={`/tasks/${t.id}/messages`} class="ask">
+                  <textarea name="text" required maxlength={10000} placeholder={t.status === "awaiting_review" ? "Ask for a change, or ask the agent a question about the PR" : "Answer the agent, steer it, or ask how it's going"} />
+                  <button class="btn primary" type="submit" style="align-self:flex-end">Send</button>
+                </form>
+              ) : <p class="note"><a class="link" href={`/signin?back=/tasks/${t.id}`}>Sign in</a> to write to the agent. You can also comment on the {t.pr ? "PR" : "issue"}.</p>
+            ) : null}
           </Card>
           <Card>
             <h3 style="margin-bottom:10px">Agent turns</h3>
@@ -415,6 +430,8 @@ export function TaskPage({ t, events, facts, now }: { t: TaskRecord; events: Led
             <dl class="kv" style="margin-top:12px">
               <dt>Source</dt><dd>{t.source.url !== null ? <a class="link" href={t.source.url}>{t.source.repo.owner}/{t.source.repo.name}#{t.source.issueNumber}</a> : `${t.source.repo.owner}/${t.source.repo.name}`}</dd>
               <dt>Branch</dt><dd class="mono">{t.branch ?? "–"}</dd>
+              {(t.repos ?? []).length > 1 ? <><dt>Repos</dt><dd>{t.repos!.map((r) => <div><span class="mono">{r.repo.owner}/{r.repo.name}</span>{r.pr ? <> <a class="link" href={r.pr.url}>#{r.pr.number}</a></> : <span class="muted"> no PR yet</span>}</div>)}</dd></> : null}
+              {team ? <><dt>Team</dt><dd><a class="link" href={`/teams/${team.slug}`}>{team.name}</a>, <a class="link" href={`/factories/${team.factory}`}>{team.factory}</a> factory</dd></> : null}
               <dt>Environment</dt><dd>{t.environment ? <><span class="mono">{t.environment.name}</span> <span class="muted">({t.environment.plugin})</span></> : "–"}</dd>
               <dt>Workspace</dt><dd>{t.workspace ? <><span class="mono">{t.workspace.id.slice(0, 24)}</span> <span class="muted">({t.workspace.plugin})</span></> : "–"}</dd>
               <dt>People</dt><dd>{t.people.comments} comments, {t.people.reviewRounds} review rounds</dd>
@@ -441,6 +458,81 @@ export function TaskPage({ t, events, facts, now }: { t: TaskRecord; events: Led
   );
 }
 
+
+type Said = { who: string; role: string; text: string; at: string; agent: boolean; url: string | null };
+
+/** The task as a conversation: agent turn summaries, people's messages from the app, comments and foreman replies. */
+export function conversation(t: TaskRecord, events: readonly LedgerEvent[], facts: TaskFacts): Said[] {
+  const out: Said[] = [];
+  for (const r of facts.turns) {
+    if (r.summary) out.push({ who: "agent", role: r.reason === "intake" ? "worked on it" : r.reason === "review" ? "answered review" : "was steered", text: r.summary.slice(0, 1500), at: r.finishedAt ?? r.startedAt, agent: true, url: null });
+  }
+  for (const e of events) {
+    const d = e.data;
+    if (e.type === "message_received" && typeof d.text === "string") out.push({ who: String(d.author ?? "someone"), role: "wrote in the app", text: d.text, at: e.at, agent: false, url: typeof d.url === "string" ? d.url : null });
+    else if (e.type === "comment_received" && d.isBot !== true) out.push({ who: String(d.author ?? "someone"), role: `commented on the ${d.on === "pr" ? "PR" : "issue"}`, text: "Left a comment.", at: e.at, agent: false, url: d.on === "pr" ? (t.pr?.url ?? null) : t.source.url });
+    else if (e.type === "foreman_replied") out.push({ who: "foreman", role: "replied", text: "Answered on the issue.", at: e.at, agent: true, url: typeof d.url === "string" ? d.url : null });
+  }
+  // A message from the app is also a comment signal; show it once.
+  const msgs = out.filter((m) => m.role === "wrote in the app");
+  return out
+    .filter((m) => !(m.role.startsWith("commented") && msgs.some((x) => x.who === m.who && Math.abs(Date.parse(x.at) - Date.parse(m.at)) < 120_000)))
+    .sort((a, b) => a.at.localeCompare(b.at));
+}
+
+const RISK_NEEDS: Record<string, string> = { low: "Needs 1 approval.", medium: "Needs 1 approval from someone who knows the area.", high: "Needs 2 approvals, one from CODEOWNERS." };
+
+/** What a reviewer needs before opening the diff: risk, test users already set up, and the checks. */
+function ReviewPanel({ t, facts, team, factory }: { t: TaskRecord; facts: TaskFacts; team: Team | null; factory: FactoryView | null }) {
+  const users = t.evidence.filter((e) => e.kind === "test-user");
+  const media = t.evidence.filter((e) => e.kind === "screenshot" || e.kind === "video");
+  const tests = t.evidence.filter((e) => e.kind === "test-output");
+  const world = (t.worldChecks ?? []).at(-1) ?? null;
+  const judge = t.scores.filter((s) => s.scorer.startsWith("judge.")).at(-1) ?? null;
+  return (
+    <div class="card" style="margin-bottom:16px">
+      <div class="head">
+        <div>
+          <h3>{t.status === "awaiting_review" ? "Waiting for your review" : "Review"}</h3>
+          <div class="muted" style="font-size:13px;margin-top:2px">{t.pr ? <>PR <a class="link" href={t.pr.url}>#{t.pr.number}</a>{facts.prSize ? `, +${facts.prSize.additions} −${facts.prSize.deletions} in ${facts.prSize.changedFiles} files` : ""}{(t.repos ?? []).length > 1 ? `, and ${t.repos!.length - 1} more repo${t.repos!.length === 2 ? "" : "s"}` : ""}</> : "No PR yet"}</div>
+        </div>
+        {t.pr ? <a class="btn primary" href={t.pr.url}><Icon name="pr" />Review on GitHub</a> : null}
+      </div>
+      <div class="split" style="margin:14px -22px -20px;border-top:1px solid var(--rule)">
+        <div>
+          <div class="muted" style="font-size:12.5px">Merge risk</div>
+          {t.risk ? (
+            <>
+              <div class={`risk ${t.risk.level}`} style="margin-top:6px;font-size:16px"><i />{t.risk.level[0]!.toUpperCase() + t.risk.level.slice(1)}</div>
+              <div class="t2" style="font-size:13.5px;margin-top:4px">{RISK_NEEDS[t.risk.level]} {t.risk.reasons.join(" ")}</div>
+              <div class="muted" style="font-size:12.5px;margin-top:6px">{factory?.mergeRisk ? `${team?.name ?? "The team"}'s review rules` : "The org's default rules"} decide low, medium and high{t.risk.headSha !== t.pr?.headSha ? ", on an earlier head" : ""}.</div>
+            </>
+          ) : <div class="muted" style="margin-top:6px;font-size:13.5px">Not assessed yet.</div>}
+          <div class="muted" style="font-size:12.5px;margin-top:16px">Checks</div>
+          <dl class="kv" style="margin-top:6px;grid-template-columns:140px minmax(0,1fr);font-size:13.5px">
+            <dt>CI on the PR</dt><dd>{facts.ciOnHead === null ? <span class="muted">no result yet</span> : <Badge tone={facts.ciOnHead === "success" ? "good" : "bad"}>{facts.ciOnHead === "success" ? "green" : "red"} on head</Badge>}</dd>
+            <dt>E2E in its env</dt><dd>{tests.length ? tests.map((e) => <div><a class="link" href={e.url}>{e.title}</a></div>) : <span class="muted">no test output attached</span>}</dd>
+            <dt>OpenWorld</dt><dd>{world ? <><Badge tone={world.status === "passed" ? "good" : world.status === "failed" ? "bad" : "warn"}>{world.status}</Badge> <span class="t2">{world.simDays} days in {world.world}{world.status !== "passed" && world.invariants.some((i) => !i.ok) ? `: ${world.invariants.filter((i) => !i.ok).map((i) => i.name).join(", ")}` : ""}</span>{world.reportUrl ? <> <a class="link" href={world.reportUrl}>report</a></> : null}</> : factory?.world ? <span class="muted">runs after review starts</span> : <span class="muted">no world for this team</span>}</dd>
+            {judge ? <><dt>Review judge</dt><dd>{judge.label ?? judge.value} <span class="muted">{judge.reason.slice(0, 160)}</span></dd></> : null}
+          </dl>
+        </div>
+        <div>
+          <div class="muted" style="font-size:12.5px">Try it yourself, already set up</div>
+          {users.length === 0 ? <div class="muted" style="font-size:13.5px;margin-top:6px">The agent attached no test users. Ask it to set one up in the state the change is about.</div> : (
+            <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">{users.map((e: Evidence) => (
+              <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;border:1px solid var(--rule);border-radius:6px;padding:8px 10px">
+                <div style="min-width:0"><b style="font-weight:550">{e.testUser?.state ?? e.title}</b><div class="muted" style="font-size:12.5px">{e.testUser?.role ?? "user"}{e.environment ? `, ${e.environment}` : ""}</div></div>
+                <a class="btn" href={e.testUser?.loginUrl ?? e.url}>Open as this user</a>
+              </div>
+            ))}</div>
+          )}
+          {media.length > 0 ? <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">{media.slice(0, 6).map((e) => <a class="chip" href={e.url}><Icon name={e.kind === "video" ? "eye" : "eye"} />{e.title}</a>)}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function describe(e: LedgerEvent): string {
   const d = e.data;
   const s = (k: string) => (typeof d[k] === "string" || typeof d[k] === "number" ? String(d[k]) : "");
@@ -458,6 +550,11 @@ function describe(e: LedgerEvent): string {
     case "error": return `${s("stage")}: ${s("message").slice(0, 300)}`;
     case "egress": return `${d.allowed === false ? "denied" : "allowed"} ${s("host")} ×${s("count")}`;
     case "signal_received": return `${s("type")} from ${s("actor")}`;
+    case "message_received": return `from ${s("author")}`;
+    case "world_check": return `${s("world")}: ${s("status")}`;
+    case "merge_risk": return `${s("level")}`;
+    case "version_routed": return `${s("version")} (${s("arm")})`;
+    case "scope_planned": return Array.isArray(d.repos) ? `${d.repos.length} repos` : "";
     case "pr_stats": return `+${s("additions")} −${s("deletions")} in ${s("changedFiles")} files`;
     case "transcript_saved": return `turn ${s("turn")}, ${s("lines")} lines`;
     case "cancelled": return `by ${s("by") || "someone"}${s("reason") ? `: ${s("reason")}` : ""}`;

@@ -18,5 +18,9 @@ export async function orgDeps(message: (id: TaskId, author: string, text: string
     teams: async () => TEAMS,
     factories: async () => factoryViews({ payments: { extends: "default", scorers: ["ledger-balances"], benchmarks: [], world: "payments-30d" } }, TEAMS),
     message,
+    ask: async (i: { ask: string; repo: string | null; requestedBy: string }) => {
+      if (i.repo === "o/none") throw new Error("not a factory repo");
+      return { issueUrl: "https://github.com/o/r/issues/9", repo: i.repo ?? "o/r", issueNumber: 9 };
+    },
   };
 }

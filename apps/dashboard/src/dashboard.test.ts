@@ -66,6 +66,44 @@ function fakeServer(tasks: TaskRecord[], events: Record<string, LedgerEvent[]> =
     if (c.req.param("id") === "task_open") return c.json({ code: "TASK_NOT_MERGED", message: "task is working" }, 409);
     return c.json({ task: { id: "bench_x", sourceTaskId: c.req.param("id"), repo: { host: "github", owner: "acme", name: "app" }, startCommit: "abc", ask: "a", check: { kind: "command", command: ["true"], files: {} }, createdAt: "2026-11-13T00:00:00Z" } }, 201);
   });
+  const teams = [
+    { slug: "core", name: "Core", source: "config", members: [{ login: "dana", name: null, role: "maintainer" }, { login: "li", name: null, role: "member" }], repos: ["acme/app"], factory: "default" },
+    { slug: "payments", name: "Payments", source: "config", members: [{ login: "omar", name: null, role: "member" }], repos: ["acme/pay"], factory: "payments" },
+  ];
+  s.get("/v1/teams", (c) => c.json({ teams }));
+  const views: Array<Record<string, unknown>> = [];
+  const rollouts: Record<string, Record<string, unknown>> = {};
+  s.get("/v1/factories", (c) => c.json({
+    factories: [
+      { slug: "default", extends: null, description: "Org default", scorers: [], benchmarks: [], world: null, mergeRisk: null, teams: ["core"] },
+      { slug: "payments", extends: "default", description: null, scorers: ["ledger-balances"], benchmarks: ["payments-core"], world: "payments-30d", mergeRisk: { riskyPaths: ["src/money/"] }, teams: ["payments"] },
+    ],
+    rollouts: Object.values(rollouts),
+  }));
+  s.get("/v1/rollout/:f", (c) => c.json({ rollout: rollouts[c.req.param("f")] ?? null, history: [] }));
+  s.post("/v1/rollout/:f", async (c) => {
+    const b = await c.req.json();
+    const r = { factory: c.req.param("f"), live: b.live, candidate: b.candidate, share: b.share, updatedBy: b.by, updatedAt: "2026-11-13T00:00:00Z", note: b.note ?? null };
+    rollouts[c.req.param("f")] = r;
+    return c.json({ rollout: r });
+  });
+  s.get("/v1/views", (c) => c.json({ views: views.filter((v) => v.owner === c.req.query("viewer") || v.share === "org") }));
+  s.get("/v1/views/:id", (c) => { const v = views.find((x) => x.id === c.req.param("id")); return v ? c.json({ view: v }) : c.json({ message: "no" }, 404); });
+  s.post("/v1/views", async (c) => {
+    const b = await c.req.json();
+    const v = { id: `view_${views.length + 1}`, createdAt: "2026-11-13T00:00:00Z", updatedAt: "2026-11-13T00:00:00Z", ...b, team: b.share === "team" ? b.team : null };
+    views.push(v);
+    return c.json({ view: v });
+  });
+  s.post("/v1/tasks/:id/messages", async (c) => {
+    posted.push(`msg:${c.req.param("id")}:${(await c.req.json()).text}`);
+    return c.json({ task: tasks.find((y) => y.id === c.req.param("id")), url: "https://github.com/acme/app/pull/2#c" });
+  });
+  s.post("/v1/tasks", async (c) => {
+    const b = await c.req.json();
+    posted.push(`new:${b.requestedBy}:${b.repo}:${b.ask}`);
+    return c.json({ issueUrl: "https://github.com/acme/app/issues/9", repo: b.repo ?? "acme/app", issueNumber: 9 }, 202);
+  });
   s.get("/v1/bench/tasks", (c) => c.json({ tasks: [] }));
   s.get("/v1/bench/runs", (c) => c.json({ runs: [] }));
   const api = new FactoryApi({ baseUrl: "http://factory.test", token: null, fetch: (i, init) => Promise.resolve(s.fetch(new Request(i, init))) });
@@ -84,11 +122,11 @@ describe("dashboard", () => {
     const { api } = fakeServer([t("task_a")]);
     const app = createDashboard(api, { password: "pw", models: ["a", "b"] });
     expect((await app.request("/")).status).toBe(401);
-    const res = await app.request("/runs", { headers: { authorization: `Basic ${btoa("factory:pw")}` } });
+    const res = await app.request("/tasks?days=0", { headers: { authorization: `Basic ${btoa("factory:pw")}` } });
     const html = await res.text();
     expect(res.status).toBe(200);
     expect(html).toContain("Task &lt;b&gt;task_a&lt;/b&gt;");
-    expect(html).toContain("1 of 1 runs");
+    expect(html).toContain("1 of 1 tasks in scope");
   });
 
   it("task page shows timeline; add-to-benchmark redirects with a message, including refusals", async () => {
@@ -108,7 +146,8 @@ describe("dashboard", () => {
     const { api } = fakeServer([t("task_a")]);
     const app = createDashboard(api, { password: null, models: ["a", "b"] });
     expect(await (await app.request("/bench")).text()).toContain("Empty.");
-    expect(await (await app.request("/versions")).text()).toContain("fv_1");
+    expect((await app.request("/versions")).headers.get("location")).toBe("/factories/default");
+    expect(await (await app.request("/factories/default")).text()).toContain("fv_1");
   });
 
   it("shows a readable error page when the server is down", async () => {
@@ -125,19 +164,16 @@ describe("dashboard", () => {
       t("task_w", { status: "working", title: "Busy", pr: null }),
     ]);
     const app = createDashboard(api, { password: null, models: ["a", "b"], now: () => "2026-11-13T12:00:00Z" });
-    const home = await (await app.request("/activity")).text();
+    expect((await app.request("/activity")).headers.get("location")).toBe("/");
+    const home = await (await app.request("/")).text();
     expect(home).toContain("Review the PR");
-    expect(home).toContain("PR #7 is waiting for review.");
-    expect(home).toMatch(/Working<span class="n">1</);
+    expect(home).toContain("Agents working <span class=\"n\">1</span>");
     expect(home).toContain('http-equiv="refresh"');
-    const needs = await (await app.request("/activity?stage=needs_you")).text();
-    expect(needs).toContain("Showing 1 result");
-    expect(needs).not.toContain("Busy");
-    const open = await (await app.request("/runs?status=open")).text();
+    const open = await (await app.request("/tasks?state=open&days=0")).text();
     expect(open).toContain("Busy");
-    expect(open).not.toContain("task_a</div>");
-    const q = await (await app.request("/runs?q=needs")).text();
-    expect(q).toContain("1 of 3 runs");
+    expect(open).not.toContain("Task &lt;b&gt;task_a");
+    const q = await (await app.request("/tasks?q=needs&days=0")).text();
+    expect(q).toContain("1 of 3 tasks in scope");
   });
 
   it("metrics page renders autonomy, cycle time, cost by size and outcomes", async () => {
@@ -151,8 +187,8 @@ describe("dashboard", () => {
       ],
     });
     const app = createDashboard(api, { password: null, models: ["a", "b"], now: () => "2026-11-13T12:00:00Z" });
-    expect((await app.request("/metrics?days=7")).headers.get("location")).toBe("/?days=7");
-    const html = await (await app.request("/?days=7")).text();
+    expect((await app.request("/metrics?days=7")).headers.get("location")).toBe("/insights");
+    const html = await (await app.request("/overview?days=7")).text();
     expect(html).toContain("Autonomy");
     expect(html).toContain("1 of 1 merged PRs had no human commit");
     expect(html).toContain("1h 0m"); // kickoff → PR
@@ -187,17 +223,17 @@ describe("dashboard", () => {
     const stop = await app.request("/tasks/task_w/cancel", { method: "POST", body: new URLSearchParams({ reason: "wrong ask" }) });
     expect(stop.status).toBe(303);
     expect(cancelled).toEqual([{ id: "task_w", body: { by: "dashboard", reason: "wrong ask" } }]);
+    expect(page).toContain("Did it"); // the agent's turn summary is in the conversation
   });
 
   it("factory pages show agents, prompts, providers and rules; the font is served", async () => {
     const { api } = fakeServer([]);
     const app = createDashboard(api, { password: null, models: ["a", "b"], factoryName: "acme" });
-    expect((await app.request("/factory")).headers.get("location")).toBe("/agents");
+    expect((await app.request("/factory")).headers.get("location")).toBe("/factories/default");
     const agents = await (await app.request("/agents")).text();
     expect(agents).toContain("implementation");
     expect(agents).toContain("claude-code");
-    expect(agents).toContain("fv_1"); // sidebar version chip
-    expect(agents).toContain(">acme<");
+    expect(agents).toContain("fv_1"); // sidebar version
     expect(await (await app.request("/agents/implementation")).text()).toContain("You are &lt;the&gt; agent");
     expect(await (await app.request("/agents/implementation?prompt=review")).text()).toContain(">r</pre>");
     expect((await app.request("/agents/nope")).status).toBe(404);
@@ -208,5 +244,92 @@ describe("dashboard", () => {
     const font = await app.request("/assets/mona-sans.woff2");
     expect(font.headers.get("content-type")).toBe("font/woff2");
     expect((await font.arrayBuffer()).byteLength).toBeGreaterThan(10_000);
+  });
+
+  const ev = (id: string, type: string, at: string, data: Record<string, unknown>): LedgerEvent => ({ taskId: id, at, type, data });
+  const cookie = { cookie: "of_user=dana" };
+
+  it("scopes every page to org, team or person, and the inbox defaults to the viewer", async () => {
+    const { api } = fakeServer([
+      t("task_d", { requestedBy: "dana", title: "Dana's review", status: "awaiting_review" }),
+      t("task_o", { requestedBy: "omar", title: "Omar's review", status: "awaiting_review", source: { kind: "github_issue", repo: { host: "github", owner: "acme", name: "pay" }, issueNumber: 3, url: null } }),
+    ]);
+    const app = createDashboard(api, { password: null, models: ["a", "b"], now: () => "2026-11-13T12:00:00Z" });
+    const signin = await app.request("/signin", { method: "POST", body: new URLSearchParams({ login: "dana", back: "/" }) });
+    expect(signin.headers.get("set-cookie")).toContain("of_user=dana");
+    const mine = await (await app.request("/", { headers: cookie })).text();
+    expect(mine).toContain("Dana&#39;s review");
+    expect(mine).not.toContain("Omar&#39;s review");
+    expect(mine).toContain("Signed in as");
+    const org = await (await app.request("/?scope=org", { headers: cookie })).text();
+    expect(org).toContain("Omar&#39;s review");
+    const team = await (await app.request("/tasks?scope=team:payments&days=0", { headers: cookie })).text();
+    expect(team).toContain("Omar&#39;s review");
+    expect(team).not.toContain("Dana&#39;s review");
+    expect(team).toContain("Payments"); // breadcrumb
+    expect((await (await app.request("/teams")).text())).toContain("Payments");
+    const tp = await (await app.request("/teams/payments")).text();
+    expect(tp).toContain("payments-30d");
+    expect(tp).toContain("omar");
+    expect(await (await app.request("/people/dana")).text()).toContain("Dana&#39;s review");
+  });
+
+  it("insights measures came-back by kind and every number opens its tasks; views save", async () => {
+    const { api } = fakeServer([
+      t("task_r", { title: "Fix refund rounding", outcomes: [{ kind: "merged", source: "github", detail: "merge abc1234", at: "2026-11-01T00:00:00Z", arrivedAt: "2026-11-01T00:00:00Z" }, { kind: "reverted", source: "github", detail: "reverted by PR #9", at: "2026-11-03T00:00:00Z", arrivedAt: "2026-11-03T00:00:00Z" }] }),
+      t("task_ok", { title: "Add the usage page" }),
+    ]);
+    const app = createDashboard(api, { password: null, models: ["a", "b"], now: () => "2026-11-13T12:00:00Z" });
+    const html = await (await app.request("/insights?scope=org&days=30&measure=came_back&by=kind", { headers: cookie })).text();
+    expect(html).toContain("Came back after merge, by kind of task");
+    expect(html).toContain("50%");
+    expect(html).toContain("/tasks?scope=org&amp;days=30&amp;kind=Bug+fixes&amp;state=came_back");
+    const back = await (await app.request("/tasks?scope=org&days=30&kind=Bug+fixes&state=came_back")).text();
+    expect(back).toContain("Fix refund rounding");
+    expect(back).not.toContain("Add the usage page");
+    const saved = await app.request("/views", { method: "POST", headers: cookie, body: new URLSearchParams({ name: "What came back", path: "/insights?scope=org&measure=came_back&by=kind", share: "team:core" }) });
+    expect(decodeURIComponent(saved.headers.get("location") ?? "")).toContain('Saved "What came back" for the core team.');
+    expect((await app.request("/views/view_1")).headers.get("location")).toBe("/insights?scope=org&measure=came_back&by=kind&view=view_1");
+  });
+
+  it("task page has the conversation, a review panel with risk, test users and the world check, and sends messages", async () => {
+    const { api, posted } = fakeServer([
+      t("task_v", {
+        status: "awaiting_review",
+        requestedBy: "dana",
+        pr: { number: 7, url: "https://github.com/acme/app/pull/7", headSha: "h2" },
+        risk: { level: "medium", reasons: ["Touches billing UI."], headSha: "h2" },
+        evidence: [{ kind: "test-user", title: "Free plan, 85% used", url: "https://env/login?u=1", commitSha: "h2", environment: "devspace:task-v", createdAt: "2026-11-13T00:00:00Z", testUser: { role: "free user", state: "Free plan, 85% used", loginUrl: "https://env/login?u=1" } }],
+        worldChecks: [{ world: "core-30d", headSha: "h2", simDays: 30, status: "passed", startedAt: "2026-11-13T00:00:00Z", finishedAt: "2026-11-13T00:03:00Z", invariants: [], metrics: [], reportUrl: null }],
+      }),
+    ], { task_v: [ev("task_v", "message_received", "2026-11-13T01:00:00Z", { author: "li", text: "Use the design-system bar", url: null })] });
+    const app = createDashboard(api, { password: null, models: ["a", "b"], now: () => "2026-11-13T12:00:00Z" });
+    const page = await (await app.request("/tasks/task_v", { headers: cookie })).text();
+    expect(page).toContain("Waiting for your review");
+    expect(page).toContain("risk medium");
+    expect(page).toContain("Open as this user");
+    expect(page).toContain("30 days in core-30d");
+    expect(page).toContain("Use the design-system bar");
+    const sent = await app.request("/tasks/task_v/messages", { method: "POST", headers: cookie, body: new URLSearchParams({ text: "Rename the button" }) });
+    expect(sent.status).toBe(303);
+    expect(posted).toContain("msg:task_v:Rename the button");
+    const created = await app.request("/tasks/new", { method: "POST", headers: cookie, body: new URLSearchParams({ ask: "Add CSV export", repo: "" }) });
+    expect(decodeURIComponent(created.headers.get("location") ?? "")).toContain("acme/app#9");
+    expect(posted).toContain("new:dana:null:Add CSV export");
+  });
+
+  it("factories list team factories, and a trial, promotion and rollback go through the rollout API", async () => {
+    const { api } = fakeServer([t("task_a"), t("task_b", { factoryVersion: "fv_0", createdAt: "2026-11-01T00:00:00Z" })]);
+    const app = createDashboard(api, { password: null, models: ["a", "b"], now: () => "2026-11-13T12:00:00Z" });
+    const list = await (await app.request("/factories")).text();
+    expect(list).toContain("payments");
+    expect(list).toContain("world payments-30d");
+    const anon = await app.request("/factories/default/rollout", { method: "POST", body: new URLSearchParams({ live: "fv_1", candidate: "fv_2", share: "0.1" }) });
+    expect(anon.headers.get("location")).toContain("/signin");
+    const trial = await app.request("/factories/default/rollout", { method: "POST", headers: cookie, body: new URLSearchParams({ live: "fv_1", candidate: "fv_2", share: "0.1", note: "trial" }) });
+    expect(decodeURIComponent(trial.headers.get("location") ?? "")).toContain("fv_2 now gets 10% of new tasks.");
+    const page = await (await app.request("/factories/default", { headers: cookie })).text();
+    expect(page).toContain("Promote fv_2");
+    expect(page).toContain("Roll back to fv_0");
   });
 });
