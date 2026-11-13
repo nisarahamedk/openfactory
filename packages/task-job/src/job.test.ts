@@ -431,3 +431,64 @@ describe("job state in Postgres", () => {
     await b.close();
   }, 30_000);
 });
+
+describe("job state in Postgres, when a write fails", () => {
+  it("closes the job so the sweep reopens it from the log, instead of leaving it stuck", async () => {
+    const { JobLog, runMigrations } = await import("@openfactory/ledger");
+    const w = world();
+    const db = drizzle(new PGlite());
+    await runMigrations(db);
+    const ledger = new Ledger(db);
+    const real = new JobLog(db);
+    let failNext = false;
+    const jobLog = Object.assign(Object.create(real) as typeof real, {
+      append: async (...a: Parameters<typeof real.append>) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("connection reset");
+        }
+        return real.append(...a);
+      },
+    });
+    const faux = fauxProvider({ provider: "foreman-faux", models: [{ id: "haiku" }] });
+    faux.setResponses(Array.from({ length: 10 }, () => fauxAssistantMessage("On it.")));
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const logs: string[] = [];
+    const jobs = new TaskJobs(
+      {
+        ledger,
+        rules: { label: "factory", botLogins: [], maxTaskUsd: 10, maxReviewRounds: 3 },
+        chat: w.chat,
+        codeForge: w.codeForge,
+        agent: w.agent,
+        workspace: w.workspace,
+        environment: w.environment,
+        modelKeys: null,
+        evidence: { put: async (t, name) => ({ url: `https://factory/evidence/${t}/${name}` }) },
+        scorers: factScorers,
+        sinks: [],
+        config: { baseBranch: "main", workerImage: null, agentEnv: {}, maxNudges: 1, branchPrefix: "factory/" },
+        log: (m) => void logs.push(m),
+      },
+      { dataDir: mkdtempSync(join(tmpdir(), "jobs-")), models, foremanModel: { provider: "foreman-faux", modelId: "haiku" }, factoryVersion: () => "fv_test", harnessInfo: { name: "fake-agent", model: "fake" }, jobLog, holder: "srv-a" },
+    );
+    const base = { repo, at: new Date().toISOString(), actor: { login: "nisar", isBot: false } };
+    const taskId = (await jobs.handle({ ...base, id: "f1", type: "issue_labeled", issueNumber: 5, label: "factory", title: "Dark mode", body: "Add it", labels: ["factory"] })).taskId!;
+    await jobs.idle(taskId);
+
+    // The database drops the next write: the job closes itself and gives its lease up.
+    failNext = true;
+    await expect(jobs.handle({ ...base, id: "f2", type: "pr_review_comment", prNumber: 41, body: "first", path: null })).rejects.toThrow("connection reset");
+    await new Promise((res) => setTimeout(res, 50));
+    expect(logs).toContain("job storage write failed; closing the job so it reopens from Postgres");
+
+    // The next sweep reopens it from Postgres, and it carries on.
+    expect(await jobs.resumeAll()).toEqual({ resumed: 1, rebuilt: 0 });
+    expect((await jobs.handle({ ...base, id: "f3", type: "pr_review_comment", prNumber: 41, body: "Use the system theme", path: null })).kind).toBe("review_round");
+    await jobs.idle(taskId);
+    expect((await ledger.getTask(taskId))!.status).toBe("awaiting_review");
+    expect(w.sessions.at(-1)).toBe("sess-1");
+    await jobs.close();
+  }, 30_000);
+});

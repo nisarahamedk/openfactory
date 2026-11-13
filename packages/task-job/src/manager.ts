@@ -97,14 +97,21 @@ export class TaskJobs {
     if (!log || existsSync(this.sqlitePath(taskId))) return { storage: await openNodeSqliteStorage(this.sqlitePath(taskId)) };
     const lease = await log.acquire(taskId, this.holder, this.leaseMs);
     if (!lease) throw new TaskBusy(taskId);
-    return { storage: await PostgresJobStorage.open(log, lease, ctx), lease };
+    const onBroken = (e: unknown) => {
+      this.deps.log("job storage write failed; closing the job so it reopens from Postgres", { taskId, error: describeError(e) });
+      void this.drop(taskId, true, lease);
+    };
+    return { storage: await PostgresJobStorage.open(log, lease, ctx, onBroken), lease };
   }
 
   /** Close a task's job here (lease lost, or shutting down). */
-  private async drop(taskId: TaskId, release: boolean): Promise<void> {
+  private async drop(taskId: TaskId, release: boolean, only?: Lease): Promise<void> {
     const p = this.open.get(taskId);
-    this.open.delete(taskId);
-    const o = await p?.catch(() => null);
+    if (!p) return;
+    const o = await p.catch(() => null);
+    // A job reopened since (a new lease) is not the one to drop.
+    if (only && o?.lease !== only) return;
+    if (this.open.get(taskId) === p) this.open.delete(taskId);
     if (!o) return;
     if (o.renew) clearInterval(o.renew);
     await o.h.close(ctx).catch(() => {});
@@ -133,14 +140,22 @@ export class TaskJobs {
         h.resume();
         const o: Open = { h, root, lease };
         if (lease) {
+          let renewedAt = Date.now();
           o.renew = setInterval(() => {
             void this.opts.jobLog!.renew(lease, this.leaseMs).then(
               (ok) => {
-                if (ok) return;
+                if (ok) {
+                  renewedAt = Date.now();
+                  return;
+                }
                 this.deps.log("job lease lost; stopping the job here", { taskId });
-                void this.drop(taskId, false);
+                void this.drop(taskId, false, lease);
               },
-              (e) => this.deps.log("job lease renewal failed", { taskId, error: describeError(e) }),
+              (e) => {
+                this.deps.log("job lease renewal failed", { taskId, error: describeError(e) });
+                // Past the lease, another server may have the task: stop here; the sweep reopens it if not.
+                if (Date.now() - renewedAt >= this.leaseMs) void this.drop(taskId, false, lease);
+              },
             );
           }, Math.max(1000, Math.floor(this.leaseMs / 3)));
           o.renew.unref?.();
