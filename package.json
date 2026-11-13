@@ -1,0 +1,16 @@
+{
+  "name": "openfactory",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "2.6.0",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4",
+    "@types/node": "22.18.0"
+  }
+}
