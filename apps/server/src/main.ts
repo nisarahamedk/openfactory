@@ -8,7 +8,7 @@ import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
 import { GitHubClient, parseWebhook } from "@openfactory/github";
-import { teamFor, type AgentHarness, type CodeForge, type Directory, type MetricsSink, type OutcomeSource, type Signal, type Team, type TaskId, type WorldCheck } from "@openfactory/contracts";
+import { teamFor, type RepoRef, type AgentHarness, type CodeForge, type Directory, type MetricsSink, type OutcomeSource, type Signal, type Team, type TaskId, type WorldCheck } from "@openfactory/contracts";
 import { globToRegex } from "@openfactory/rules";
 import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
@@ -69,6 +69,9 @@ async function main() {
     name: forge.name,
     openPullRequest: (i) => forge.openPullRequest(i),
     findPullRequestForBranch: (r, b) => forge.findPullRequestForBranch(r, b),
+    // Optional forge features must pass through the wrapper, or PR size and the risk label silently go missing.
+    ...(forge.pullRequestStats ? { pullRequestStats: (r: RepoRef, n: number) => forge.pullRequestStats!(r, n) } : {}),
+    ...(forge.setPrefixedLabels ? { setPrefixedLabels: (r: RepoRef, n: number, p: string, l: string[]) => forge.setPrefixedLabels!(r, n, p, l) } : {}),
     mintPushToken: async (repo) => {
       if (!p.secrets) return forge.mintPushToken(repo);
       const s = await p.secrets.issue({ kind: "git", repo, access: "write" });
