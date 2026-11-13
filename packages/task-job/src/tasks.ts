@@ -16,7 +16,9 @@ import {
   announceReview,
   fail,
   mustTask,
+  notePushesByOthers,
   prepare,
+  recordPrStats,
   reviewGate,
   runTurn,
   scoreAndExport,
@@ -128,6 +130,8 @@ export function jobTasks(deps: JobDeps) {
     phases: {
       record: async (task, rt, c) => {
         const { taskId, outcome, detail, at } = task.input;
+        await notePushesByOthers(deps, taskId);
+        if (outcome === "merged") await recordPrStats(deps, taskId);
         const record = await mustTask(deps, taskId);
         if (!record.outcomes.some((o) => o.kind === (outcome === "merged" ? "merged" : "closed_unmerged"))) {
           await deps.ledger.append(taskId, "outcome_added", {

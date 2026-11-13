@@ -32,7 +32,14 @@ export const EventData = {
     summary: z.string().optional(),
   }),
   pr_opened: z.object({ number: z.number().int(), url: z.string(), headSha: z.string().nullable() }),
-  pushed: z.object({ sha: z.string() }),
+  /** A new PR head. `byFactory: false` means someone else pushed between agent turns (autonomy = merged with none). */
+  pushed: z.object({ sha: z.string(), byFactory: z.boolean().optional() }),
+  /** PR size at a head (recorded when the PR opens, on each factory push, and at merge). */
+  pr_stats: z.object({ headSha: z.string(), additions: z.number().int(), deletions: z.number().int(), changedFiles: z.number().int() }),
+  /** One agent turn's update stream, saved as JSONL in the EvidenceStore. */
+  transcript_saved: z.object({ turn: z.number().int(), key: z.string(), url: z.string(), lines: z.number().int() }),
+  /** Someone stopped the task through the API. */
+  cancelled: z.object({ by: z.string(), reason: z.string().optional() }),
   evidence_added: z.object({ evidence: Evidence }),
   comment_received: z.object({ author: z.string(), isBot: z.boolean(), on: z.enum(["issue", "pr"]) }),
   review_round_started: z.object({ comments: z.number().int() }),

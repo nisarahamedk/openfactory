@@ -39,6 +39,8 @@ async function setup() {
     apiToken: "tok",
     webhook: null,
     bench,
+    factory: async () => { throw new Error("unused"); },
+    cancel: async () => null,
     publicUrl: "https://f.example",
     log: () => {},
   });

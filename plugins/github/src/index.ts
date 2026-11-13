@@ -95,6 +95,11 @@ export class GitHubCodeForge implements CodeForge {
     return pr ? { number: pr.number, url: pr.html_url, headSha: pr.head.sha } : null;
   }
 
+  async pullRequestStats(repo: RepoRef, number: number) {
+    const p = await this.gh.request<{ head: { sha: string }; additions: number; deletions: number; changed_files: number }>("GET", `${r(repo)}/pulls/${number}`);
+    return { headSha: p.head.sha, additions: p.additions, deletions: p.deletions, changedFiles: p.changed_files };
+  }
+
   /** With a PAT this is the PAT itself; a GitHub App deployment swaps in installation tokens here. */
   async mintPushToken(_repo: RepoRef) {
     return { token: await this.opts.token(), expiresAt: new Date(Date.now() + 3600_000).toISOString() };

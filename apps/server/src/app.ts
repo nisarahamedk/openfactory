@@ -1,7 +1,9 @@
 /**
  * HTTP surface of the factory server:
  *   GET  /healthz
- *   GET  /v1/tasks[?status=&limit=]  GET /v1/tasks/:id  GET /v1/tasks/:id/events
+ *   GET  /v1/tasks[?status=&limit=]  GET /v1/tasks/:id  GET /v1/tasks/:id/events  POST /v1/tasks/:id/cancel
+ *   GET  /v1/factory                 version, providers, models, prompts (no secrets)
+ *   POST /v1/egress                  egress proxy collector reports
  *   POST /v1/signals                 inject a contract Signal (tests, CLI, other tools)
  *   /v1/...                          benchmark routes (packages/bench)
  *   POST /webhooks/github            GitHub webhooks (optional; polling is the default)
@@ -11,14 +13,13 @@
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Signal, TaskId, TaskStatus } from "@openfactory/contracts";
+import { Signal, TaskId, TaskStatus, type TaskRecord } from "@openfactory/contracts";
 import type { Ledger } from "@openfactory/ledger";
 import type { EvidenceStore } from "@openfactory/task-job";
 import { Hono } from "hono";
-import { buildOpenApi, EgressReport, FactoryApi } from "@openfactory/client";
+import type { z } from "zod";
+import { buildOpenApi, CancelTask, EgressReport, FactoryApi, type FactoryInfo } from "@openfactory/client";
 import { createMcpHttpHandler } from "@openfactory/mcp";
-import { z } from "zod";
-
 
 const SAFE = /^[A-Za-z0-9._-]{1,200}$/;
 
@@ -51,6 +52,10 @@ export type AppDeps = {
   apiToken: string | undefined;
   webhook: ((headers: { event: string | null; delivery: string | null; signature: string | null }, body: string) => Promise<Signal | null>) | null;
   bench: Hono | null;
+  /** GET /v1/factory. */
+  factory: () => Promise<z.infer<typeof FactoryInfo>>;
+  /** POST /v1/tasks/:id/cancel; null when the task is unknown. */
+  cancel: (taskId: TaskId, by: string, reason?: string) => Promise<TaskRecord | null>;
   /** Public base URL, used in the OpenAPI document's `servers`. */
   publicUrl: string | null;
   log: (m: string, f?: object) => void;
@@ -89,6 +94,15 @@ export function createApp(d: AppDeps): Hono {
     if (!id.success) return c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
     return c.json({ events: await d.ledger.events(id.data) });
   });
+  v1.get("/factory", async (c) => c.json({ factory: await d.factory() }));
+  v1.post("/tasks/:id/cancel", async (c) => {
+    const id = TaskId.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
+    const body = CancelTask.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ code: "INVALID_REQUEST", message: "bad cancel request", issues: body.error.issues }, 400);
+    const task = await d.cancel(id.data, body.data.by ?? "api", body.data.reason);
+    return task ? c.json({ task }) : c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
+  });
   v1.post("/signals", async (c) => {
     const s = Signal.safeParse(await c.req.json());
     if (!s.success) return c.json({ code: "INVALID_REQUEST", message: "not a Signal", issues: s.error.issues }, 400);
@@ -100,9 +114,10 @@ export function createApp(d: AppDeps): Hono {
     if (!body.success) return c.json({ code: "INVALID_REQUEST", message: "bad egress report", issues: body.error.issues }, 400);
     let recorded = 0;
     for (const e of body.data.entries) {
-      if (!(await d.ledger.getTask(e.taskId))) continue;
+      const id = TaskId.safeParse(e.taskId);
+      if (!id.success || !(await d.ledger.getTask(id.data))) continue;
       const { taskId, ...data } = e;
-      await d.ledger.append(taskId, "egress", data, { dedupeKey: `egress:${taskId}:${e.host}:${e.allowed}:${e.from}` });
+      await d.ledger.append(id.data, "egress", data, { dedupeKey: `egress:${taskId}:${e.host}:${e.allowed}:${e.from}` });
       recorded++;
     }
     return c.json({ recorded }, 202);
