@@ -29,10 +29,16 @@ const t = (id: string, over: Partial<TaskRecord> = {}): TaskRecord => ({
 });
 
 /** A stand-in factory server with the /v1 shapes the dashboard reads. */
-function fakeServer(tasks: TaskRecord[], events: Record<string, LedgerEvent[]> = {}) {
+function fakeServer(tasks: TaskRecord[], events: Record<string, LedgerEvent[]> = {}, health: unknown = { at: "t", ok: true, checks: [] }) {
   const posted: string[] = [];
   const cancelled: Array<{ id: string; body: unknown }> = [];
+  const retried: Array<{ id: string; body: unknown }> = [];
   const s = new Hono();
+  s.get("/v1/health", (c) => c.json({ health }));
+  s.post("/v1/tasks/:id/retry", async (c) => {
+    retried.push({ id: c.req.param("id"), body: await c.req.json() });
+    return c.json({ task: tasks.find((y) => y.id === c.req.param("id"))! });
+  });
   s.get("/v1/factory", (c) =>
     c.json({
       factory: {
@@ -107,7 +113,7 @@ function fakeServer(tasks: TaskRecord[], events: Record<string, LedgerEvent[]> =
   s.get("/v1/bench/tasks", (c) => c.json({ tasks: [] }));
   s.get("/v1/bench/runs", (c) => c.json({ runs: [] }));
   const api = new FactoryApi({ baseUrl: "http://factory.test", token: null, fetch: (i, init) => Promise.resolve(s.fetch(new Request(i, init))) });
-  return { api, posted, cancelled };
+  return { api, posted, cancelled, retried };
 }
 
 describe("dashboard", () => {
@@ -224,6 +230,52 @@ describe("dashboard", () => {
     expect(stop.status).toBe(303);
     expect(cancelled).toEqual([{ id: "task_w", body: { by: "dashboard", reason: "wrong ask" } }]);
     expect(page).toContain("Did it"); // the agent's turn summary is in the conversation
+  });
+
+  it("task banners follow the current state: an old stop disappears once the task runs again", async () => {
+    const ev = (type: string, at: string, data: Record<string, unknown>): LedgerEvent => ({ taskId: "task_r", at, type, data });
+    const { api } = fakeServer([t("task_r", { status: "awaiting_review" })], {
+      task_r: [
+        ev("cancelled", "2026-11-13T00:01:00Z", { by: "lead", reason: "duplicate of #130" }),
+        ev("status_changed", "2026-11-13T00:01:00Z", { from: "working", to: "failed", reason: "cancelled" }),
+        ev("error", "2026-11-13T00:02:00Z", { stage: "review gate", message: "No evidence attached." }),
+        ev("status_changed", "2026-11-13T00:03:00Z", { from: "failed", to: "iterating" }),
+        ev("status_changed", "2026-11-13T00:09:00Z", { from: "iterating", to: "awaiting_review" }),
+      ],
+    });
+    const page = await (await createDashboard(api, { password: null, models: ["a"] }).request("/tasks/task_r")).text();
+    expect(page).not.toContain("Stopped by lead");
+    expect(page).not.toContain("Last error.");
+    expect(page).not.toContain(`class="alert bad"`);
+    expect(page).not.toContain(">Retry<");
+  });
+
+  it("a failed task says what kind of failure it was and what to do, and Retry asks the server", async () => {
+    const ev = (type: string, at: string, data: Record<string, unknown>): LedgerEvent => ({ taskId: "task_f", at, type, data });
+    const { api, retried } = fakeServer([t("task_f", { status: "failed" })], {
+      task_f: [
+        ev("error", "2026-11-13T00:02:00Z", { stage: "agent turn", message: "There's an issue with the selected model (claude-sonnet).", kind: "setup", fix: "Add claude-sonnet to the gateway key's models." }),
+        ev("status_changed", "2026-11-13T00:02:00Z", { from: "working", to: "failed", reason: "agent turn" }),
+      ],
+    });
+    const app = createDashboard(api, { password: null, models: ["a"] });
+    const page = await (await app.request("/tasks/task_f")).text();
+    expect(page).toContain("Stopped by a setup problem.");
+    expect(page).toContain("Add claude-sonnet to the gateway key&#39;s models.");
+    expect(page).toContain("/tasks/task_f/retry");
+    const inbox = await (await app.request("/")).text();
+    expect(inbox).toContain("Stopped by a setup problem while agent turn. Fix the setup, then retry.");
+    const res = await app.request("/tasks/task_f/retry", { method: "POST", body: new URLSearchParams({}) });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toContain("/tasks/task_f?msg=Retrying");
+    expect(retried).toEqual([{ id: "task_f", body: { by: "dashboard" } }]);
+  });
+
+  it("every page warns while a start-up check fails", async () => {
+    const { api } = fakeServer([], {}, { at: "t", ok: false, checks: [{ name: "model gateway", ok: false, detail: "unreachable or refused the key: status 401", fix: "Check MODEL_PROXY_KEY." }] });
+    const page = await (await createDashboard(api, { password: null, models: ["a"] }).request("/tasks")).text();
+    expect(page).toContain("isn&#39;t set up to finish tasks");
+    expect(page).toContain("Check MODEL_PROXY_KEY.");
   });
 
   it("factory pages show agents, prompts, providers and rules; the font is served", async () => {

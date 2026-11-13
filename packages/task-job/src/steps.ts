@@ -9,6 +9,7 @@ import { z } from "zod";
 import { branchFor, issueTarget, type JobDeps } from "./deps.js";
 import { systemPrompt } from "./prompts.js";
 import { TranscriptRecorder } from "./transcript.js";
+import type { ErrorKind } from "./errors.js";
 
 /**
  * A readable message for anything thrown, including non-Error values such as Kubernetes client
@@ -477,11 +478,28 @@ function otherPrsLine(record: TaskRecord): string {
   return `\n\nThis task also changed: ${others.map((x) => `[${x.repo.owner}/${x.repo.name}#${x.pr!.number}](${x.pr!.url})`).join(", ")}. Merge them together.`;
 }
 
-export async function fail(deps: JobDeps, taskId: TaskId, stage: string, message: string): Promise<void> {
-  await deps.ledger.append(taskId, "error", { stage, message: message.slice(0, 2000) });
+const KIND_WORDS: Record<ErrorKind, string> = {
+  passing: "a passing problem that didn't clear after several tries",
+  setup: "a setup problem",
+  agent: "the agent didn't produce something reviewable",
+  unknown: "an unexpected error",
+};
+
+export async function fail(
+  deps: JobDeps,
+  taskId: TaskId,
+  stage: string,
+  message: string,
+  how: { kind: ErrorKind; fix: string | null; attempts?: number } = { kind: "unknown", fix: null },
+): Promise<void> {
+  await deps.ledger.append(taskId, "error", { stage, message: message.slice(0, 2000), kind: how.kind, fix: how.fix, attempts: how.attempts ?? 1 });
   const record = await deps.ledger.setStatus(taskId, "failed", stage);
   const target = record.pr ? { repo: record.source.repo, issueOrPr: record.pr.number } : issueTarget(record);
-  if (target) await deps.chat.post(target, `The factory stopped this task at **${stage}**: ${message.slice(0, 1000)}\n\nComment again to retry.`).catch(() => {});
+  const fix = how.fix ? `\n\n**What to do:** ${how.fix}` : "";
+  if (target)
+    await deps.chat
+      .post(target, `The factory stopped this task at **${stage}**: ${KIND_WORDS[how.kind]}.\n\n> ${message.slice(0, 800).replace(/\n/g, "\n> ")}${fix}\n\nComment here or press Retry in the factory app to try again.`)
+      .catch(() => {});
 }
 
 /**

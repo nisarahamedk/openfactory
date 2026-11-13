@@ -74,7 +74,14 @@ export interface TaskFacts {
   /** PR heads pushed by someone other than the factory (pushed with byFactory false). */
   humanPushes: number;
   transcripts: Array<{ turn: number; key: string; url: string; lines: number }>;
+  /** Set only while the task is stopped by a person; cleared once it runs again. */
   cancelled: { by: string | null; reason: string | null } | null;
+  /** The last error's kind and the fix the server suggested (older events have neither). */
+  lastErrorKind: "passing" | "setup" | "agent" | "unknown" | null;
+  lastErrorFix: string | null;
+  lastErrorStage: string | null;
+  /** A passing failure the job is retrying by itself right now. */
+  retrying: { stage: string; attempt: number; of: number } | null;
 }
 
 export function taskFacts(task: TaskRecord, events: readonly LedgerEvent[]): TaskFacts {
@@ -87,6 +94,10 @@ export function taskFacts(task: TaskRecord, events: readonly LedgerEvent[]): Tas
   let prSize: TaskFacts["prSize"] = null;
   let humanPushes = 0;
   let cancelled: TaskFacts["cancelled"] = null;
+  let lastErrorKind: TaskFacts["lastErrorKind"] = null;
+  let lastErrorFix: string | null = null;
+  let lastErrorStage: string | null = null;
+  let retrying: TaskFacts["retrying"] = null;
   const transcripts: TaskFacts["transcripts"] = [];
   const int = (k: string, d: Record<string, unknown>) => (typeof d[k] === "number" ? (d[k] as number) : null);
   for (const e of sorted(events)) {
@@ -102,10 +113,31 @@ export function taskFacts(task: TaskRecord, events: readonly LedgerEvent[]): Tas
         break;
       case "status_changed":
         if (e.data.to === "merged") mergedAt ??= e.at;
-        if (e.data.to === "working" || e.data.to === "iterating") lastError = null;
+        // Banners follow the current state: once the task runs again, an old stop or error no longer applies.
+        if (e.data.to !== "failed") cancelled = null;
+        if (e.data.to === "preparing" || e.data.to === "working" || e.data.to === "iterating" || e.data.to === "awaiting_review") {
+          lastError = null;
+          lastErrorKind = null;
+          lastErrorFix = null;
+          lastErrorStage = null;
+        }
+        retrying = null;
         break;
-      case "error":
+      case "error": {
         lastError = str(e.data, "message") ?? "error";
+        const k = str(e.data, "kind");
+        lastErrorKind = k === "passing" || k === "setup" || k === "agent" || k === "unknown" ? k : null;
+        lastErrorFix = str(e.data, "fix");
+        lastErrorStage = str(e.data, "stage");
+        retrying = null;
+        break;
+      }
+      case "retrying":
+        retrying = { stage: str(e.data, "stage") ?? "", attempt: int("attempt", e.data) ?? 1, of: int("of", e.data) ?? 1 };
+        break;
+      case "turn_finished":
+      case "pr_opened":
+        retrying = null;
         break;
       case "ci_completed": {
         const sha = str(e.data, "headSha");
@@ -144,7 +176,7 @@ export function taskFacts(task: TaskRecord, events: readonly LedgerEvent[]): Tas
   const head = task.pr?.headSha ?? null;
   const checks = head ? ci.get(head) : undefined;
   const ciOnHead = checks === undefined || checks.size === 0 ? null : [...checks.values()].every((c) => c === "success") ? "success" : "failure";
-  return { task, prOpenedAt, firstReviewAt, mergedAt, turns: turns(events), lastError, ciOnHead, deniedHosts: [...denied].sort(), prSize, humanPushes, transcripts, cancelled };
+  return { task, prOpenedAt, firstReviewAt, mergedAt, turns: turns(events), lastError, ciOnHead, deniedHosts: [...denied].sort(), prSize, humanPushes, transcripts, cancelled, lastErrorKind, lastErrorFix, lastErrorStage, retrying };
 }
 
 export function median(xs: readonly number[]): number | null {
@@ -373,7 +405,7 @@ export function inbox(all: readonly TaskFacts[], now: string, failedWithinDays =
       out.push({ kind: "pr_review", facts: f, since: f.prOpenedAt ?? t.updatedAt, detail: t.pr ? `PR #${t.pr.number} is waiting for review.` : "Waiting for review." });
     else if (isOpen(t.status) && f.lastError !== null) out.push({ kind: "blocked", facts: f, since: t.updatedAt, detail: f.lastError });
     else if (t.status === "failed" && f.cancelled === null && sec(t.updatedAt, now) <= failedWithinDays * 86_400)
-      out.push({ kind: "failed", facts: f, since: t.updatedAt, detail: f.lastError ?? "The task failed." });
+      out.push({ kind: "failed", facts: f, since: t.updatedAt, detail: failureLine(f) });
   }
   const order: InboxKind[] = ["blocked", "ci_failing", "pr_review", "failed"];
   return out.sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind) || a.since.localeCompare(b.since));
@@ -405,4 +437,25 @@ export function filterTasks(tasks: readonly TaskRecord[], f: RunFilter): TaskRec
       (f.model === "" || t.harness.model === f.model) &&
       (f.source === "" || t.source.kind === f.source),
   );
+}
+
+/** One plain sentence on why a task stopped, for lists and the inbox. */
+export function failureLine(f: Pick<TaskFacts, "lastError" | "lastErrorKind" | "lastErrorStage" | "cancelled">): string {
+  if (f.cancelled) return `Stopped${f.cancelled.by ? ` by ${f.cancelled.by}` : ""}${f.cancelled.reason ? `: ${f.cancelled.reason}` : "."}`;
+  const at = f.lastErrorStage ? ` while ${f.lastErrorStage}` : "";
+  switch (f.lastErrorKind) {
+    case "setup":
+      return `Stopped by a setup problem${at}. Fix the setup, then retry.`;
+    case "agent":
+      return "The agent didn't produce something reviewable. Read its last turn, then comment or retry.";
+    case "passing":
+      return `Kept failing${at} after several automatic tries. Retry when the outage is over.`;
+    default:
+      return f.lastError ? `Stopped${at}: ${firstSentence(f.lastError)}` : "The task stopped.";
+  }
+}
+
+function firstSentence(s: string): string {
+  const one = s.split(/(?<=[.!?])\s|\n/)[0] ?? s;
+  return one.length > 160 ? `${one.slice(0, 157)}…` : one;
 }

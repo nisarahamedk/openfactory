@@ -2,6 +2,8 @@
  * HTTP surface of the factory server:
  *   GET  /healthz
  *   GET  /v1/tasks[?status=&limit=]  GET /v1/tasks/:id  GET /v1/tasks/:id/events  POST /v1/tasks/:id/cancel
+ *   POST /v1/tasks/:id/retry         try a failed or stopped task again
+ *   GET  /v1/health                  start-up checks (code host, repos, model gateway, routed models)
  *   GET  /v1/factory                 version, providers, models, prompts (no secrets)
  *   POST /v1/egress                  egress proxy collector reports
  *   POST /v1/signals                 inject a contract Signal (tests, CLI, other tools)
@@ -18,7 +20,7 @@ import type { AppStore, Ledger } from "@openfactory/ledger";
 import type { EvidenceStore } from "@openfactory/task-job";
 import { Hono } from "hono";
 import type { z } from "zod";
-import { buildOpenApi, CancelTask, EgressReport, FactoryApi, NewTaskRequest, PostMessage, SaveView, SetRollout, type FactoryInfo, type FactoryView } from "@openfactory/client";
+import { buildOpenApi, CancelTask, RetryTask, type HealthReport, EgressReport, FactoryApi, NewTaskRequest, PostMessage, SaveView, SetRollout, type FactoryInfo, type FactoryView } from "@openfactory/client";
 import { createMcpHttpHandler } from "@openfactory/mcp";
 
 const SAFE = /^[A-Za-z0-9._-]{1,200}$/;
@@ -56,6 +58,10 @@ export type AppDeps = {
   factory: () => Promise<z.infer<typeof FactoryInfo>>;
   /** POST /v1/tasks/:id/cancel; null when the task is unknown. */
   cancel: (taskId: TaskId, by: string, reason?: string) => Promise<TaskRecord | null>;
+  /** POST /v1/tasks/:id/retry; null when the task is unknown. */
+  retry: (taskId: TaskId, by: string) => Promise<TaskRecord | null>;
+  /** GET /v1/health: the latest start-up checks. */
+  health: () => Promise<HealthReport>;
   /** Public base URL, used in the OpenAPI document's `servers`. */
   publicUrl: string | null;
   log: (m: string, f?: object) => void;
@@ -113,6 +119,15 @@ export function createApp(d: AppDeps): Hono {
     const task = await d.cancel(id.data, body.data.by ?? "api", body.data.reason);
     return task ? c.json({ task }) : c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
   });
+  v1.post("/tasks/:id/retry", async (c) => {
+    const id = TaskId.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
+    const body = RetryTask.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ code: "INVALID_REQUEST", message: "bad retry request", issues: body.error.issues }, 400);
+    const task = await d.retry(id.data, body.data.by ?? "api");
+    return task ? c.json({ task }) : c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
+  });
+  v1.get("/health", async (c) => c.json({ health: await d.health() }));
   v1.post("/signals", async (c) => {
     const s = Signal.safeParse(await c.req.json());
     if (!s.success) return c.json({ code: "INVALID_REQUEST", message: "not a Signal", issues: s.error.issues }, 400);

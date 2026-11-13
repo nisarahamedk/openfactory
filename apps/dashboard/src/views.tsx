@@ -341,6 +341,33 @@ function RunsTable({ tasks, facts, now }: { tasks: TaskRecord[]; facts: Map<stri
 
 // ───────────────────────────── run detail ─────────────────────────────
 
+/**
+ * The one banner under a task's title, from its current state only: retrying by itself, stopped by a person,
+ * failed (with the kind of failure and what to do), or blocked on an error while still open.
+ */
+export function TaskBanner({ t, facts }: { t: TaskRecord; facts: TaskFacts }) {
+  if (facts.retrying && isOpen(t.status))
+    return <div class="alert warn"><b>Retrying by itself.</b> A passing problem while {facts.retrying.stage}; try {facts.retrying.attempt} of {facts.retrying.of}. Nothing to do yet.</div>;
+  if (t.status === "failed" && facts.cancelled)
+    return <div class="alert warn">Stopped{facts.cancelled.by ? ` by ${facts.cancelled.by}` : ""}{facts.cancelled.reason ? `: ${sentence(facts.cancelled.reason)}` : "."} Press Retry, or comment on the issue or PR, to resume.</div>;
+  if (t.status === "failed") {
+    const head =
+      facts.lastErrorKind === "setup" ? "Stopped by a setup problem."
+      : facts.lastErrorKind === "agent" ? "The agent didn't produce something reviewable."
+      : facts.lastErrorKind === "passing" ? "Kept failing after several automatic tries."
+      : "The task stopped on an error.";
+    return (
+      <div class="alert bad">
+        <b>{head}</b>{facts.lastErrorStage ? ` While ${facts.lastErrorStage}.` : ""}
+        {facts.lastErrorFix ? <div style="margin-top:6px"><b>What to do:</b> {facts.lastErrorFix}</div> : <div style="margin-top:6px">Press Retry to try again, or comment on the issue or PR.</div>}
+        {facts.lastError ? <details style="margin-top:6px"><summary>Error details</summary><pre class="mono" style="white-space:pre-wrap;margin:6px 0 0">{facts.lastError}</pre></details> : null}
+      </div>
+    );
+  }
+  if (facts.lastError && isOpen(t.status)) return <div class="alert bad"><b>Last error.</b> {facts.lastError}</div>;
+  return null;
+}
+
 export function TaskPage({ t, events, facts, now, viewer = null, team = null, factory = null }: { t: TaskRecord; events: LedgerEvent[]; facts: TaskFacts; now: string; viewer?: string | null; team?: Team | null; factory?: FactoryView | null }) {
   const scores = [...latestScores(t.scores).values()];
   const end = isOpen(t.status) ? now : t.updatedAt;
@@ -355,6 +382,9 @@ export function TaskPage({ t, events, facts, now, viewer = null, team = null, fa
         {t.status === "merged" ? (
           <form method="post" action={`/tasks/${t.id}/benchmark`}><button class="btn" type="submit"><Icon name="flask" />Turn into benchmark task</button></form>
         ) : null}
+        {t.status === "failed" ? (
+          <form method="post" action={`/tasks/${t.id}/retry`}><button class="btn primary" type="submit"><Icon name="retry" />Retry</button></form>
+        ) : null}
         {isOpen(t.status) ? (
           <form method="post" action={`/tasks/${t.id}/cancel`} class="actions">
             <input class="in" name="reason" placeholder="Reason (optional)" maxlength={1000} style="width:170px" />
@@ -363,8 +393,7 @@ export function TaskPage({ t, events, facts, now, viewer = null, team = null, fa
         ) : null}
       </PageHeader>
 
-      {facts.lastError && isOpen(t.status) ? <div class="alert bad"><b>Last error.</b> {facts.lastError}</div> : null}
-      {facts.cancelled ? <div class="alert warn">Stopped{facts.cancelled.by ? ` by ${facts.cancelled.by}` : ""}{facts.cancelled.reason ? `: ${sentence(facts.cancelled.reason)}` : "."} A new comment on the issue or PR resumes it.</div> : null}
+      <TaskBanner t={t} facts={facts} />
 
       <div class="readout">
         <div><div class="k">Model cost</div><div class="v">{usd(t.usage.costUsd)}</div><div class="c">{t.usage.inputTokens.toLocaleString()} tokens in, {t.usage.outputTokens.toLocaleString()} out</div></div>

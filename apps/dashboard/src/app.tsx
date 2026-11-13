@@ -6,7 +6,7 @@ import { getCookie, setCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import { factoryFor, TaskId, teamFor, ViewShare, type LedgerEvent, type SavedView, type Team, type TaskRecord } from "@openfactory/contracts";
-import { FactoryApiError, type FactoryApi, type FactoryInfo } from "@openfactory/client";
+import { FactoryApiError, type FactoryApi, type FactoryInfo, type HealthReport } from "@openfactory/client";
 import type { Child } from "hono/jsx";
 import { dailySeries, inbox, insights, isOpen, taskFacts, type TaskFacts } from "./insights.js";
 import { explore, filterQuery, matches, parseFilters, people, scopeParam, type Filters, type Scope } from "./model.js";
@@ -29,7 +29,7 @@ import {
   TeamsPage,
   versionRows,
 } from "./pages.js";
-import { Shell, type Nav } from "./ui.js";
+import { HealthAlert, Shell, type Nav } from "./ui.js";
 import { AgentPage, AgentsPage, AppsPage, AutomationsPage, BenchPage, DashboardPage, EnvironmentsPage, ErrorPage, parseTranscript, SecretsPage, TaskPage, TranscriptPage } from "./views.js";
 
 /**
@@ -102,6 +102,7 @@ export function createDashboard(
   };
   const factory = cached<FactoryInfo | null>(() => api.factory(), null);
   const teamsOf = cached<Team[]>(() => api.teams(), [], 30_000);
+  const healthOf = cached<HealthReport | null>(() => api.health(), null, 30_000);
   type Factories = Awaited<ReturnType<FactoryApi["factories"]>>;
   const loadFactories = () => cached<Factories>(() => api.factories(), { factories: [], rollouts: [] }, 10_000);
   let factoriesOf = loadFactories();
@@ -122,9 +123,10 @@ export function createDashboard(
 
   type PageOpts = { title: string; nav: Nav; inboxCount?: number; refreshSec?: number | undefined; flash?: string | null; scope?: Child };
   const page = async (c: Context, p: PageOpts, body: Child) => {
-    const f = await factory();
+    const [f, h] = await Promise.all([factory(), healthOf()]);
     return (
       <Shell title={p.title} nav={p.nav} flash={p.flash === undefined ? (c.req.query("msg") ?? null) : p.flash} inboxCount={p.inboxCount} refreshSec={p.refreshSec} factory={{ name, version: f?.version ?? "" }} viewer={viewerOf(c)} scope={p.scope}>
+        {h && !h.ok ? <HealthAlert health={h} /> : null}
         {body}
       </Shell>
     );
@@ -265,6 +267,18 @@ export function createDashboard(
     if (t === null || body === null) return c.html(await page(c, { title: "Not found", nav: "tasks", flash: null }, <ErrorPage message="No such transcript." />), 404);
     const turn = Number(/^transcript-(\d+)/.exec(key)?.[1] ?? NaN);
     return c.html(await page(c, { title: `Session · ${t.title}`, nav: "tasks", flash: null }, <TranscriptPage t={t} turn={Number.isFinite(turn) ? turn : null} lines={parseTranscript(body)} />));
+  });
+
+  app.post("/tasks/:id/retry", async (c) => {
+    const id = TaskId.parse(c.req.param("id"));
+    const back = typeof (await c.req.parseBody()).back === "string" ? "/" : `/tasks/${id}`;
+    try {
+      const t = await api.retry(id, { by: viewerOf(c) ?? "dashboard" });
+      return c.redirect(msg(back, t.status === "failed" ? "Retrying. The agent picks it up in a moment." : "It's already running again."), 303);
+    } catch (err) {
+      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(back, `Couldn't retry: ${err.message}`), 303);
+      throw err;
+    }
   });
 
   app.post("/tasks/:id/cancel", async (c) => {
