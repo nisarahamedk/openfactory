@@ -42,6 +42,9 @@ export function newTaskId(): TaskId {
   return `task_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 }
 
+/** Statuses where a job was doing work (not waiting on a person), so a lost job must be rebuilt. */
+const MID_WORK = new Set<TaskRecord["status"]>(["received", "preparing", "working", "iterating"]);
+
 export class TaskJobs {
   private readonly open = new Map<TaskId, Promise<Open>>();
   private readonly tasks: JobTasks;
@@ -84,17 +87,36 @@ export class TaskJobs {
     return p;
   }
 
-  /** Reopen every task that still has work, so sleeping and interrupted jobs continue after a restart. */
-  async resumeAll(): Promise<number> {
+  /**
+   * Reopen every task that still has work, so sleeping and interrupted jobs continue after a restart.
+   *
+   * The ledger is the record; a task's job file is only where its durable job keeps its place. When that file
+   * is gone (a lost or replaced volume, a new node) a task that was mid-work is rebuilt from the ledger: it
+   * starts again from intake, or carries on as a review round once it has a PR. A task waiting for review needs
+   * nothing: the next comment starts a fresh job.
+   */
+  async resumeAll(): Promise<{ resumed: number; rebuilt: number }> {
     const live = (await this.deps.ledger.listTasks({ limit: 500 })).filter((t) => !isTerminal(t.status));
     const files = new Set(readdirSync(join(this.opts.dataDir, "tasks")));
-    let n = 0;
+    let resumed = 0;
+    let rebuilt = 0;
     for (const t of live) {
-      if (!files.has(`${t.id}.sqlite`)) continue;
-      await this.harness(t.id);
-      n++;
+      if (files.has(`${t.id}.sqlite`)) {
+        await this.harness(t.id);
+        resumed++;
+        continue;
+      }
+      if (!MID_WORK.has(t.status)) continue;
+      await this.deps.ledger.append(t.id, "job_rebuilt", { status: t.status, reason: "the task's job state was missing at start-up" });
+      if (!t.pr) await this.create(t.id, (x) => ({ def: x.Intake, input: { taskId: t.id } }));
+      else
+        await this.create(t.id, (x) => ({
+          def: x.Review,
+          input: { taskId: t.id, body: "The factory restarted while you were working. Carry on from where you left off and finish the ask.", round: t.people.reviewRounds + 1, after: [] },
+        }));
+      rebuilt++;
     }
-    return n;
+    return { resumed, rebuilt };
   }
 
   private async liveJobTasks(taskId: TaskId): Promise<PdTaskId[]> {

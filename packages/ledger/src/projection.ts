@@ -73,6 +73,8 @@ export const EventData = {
   }),
   /** A passing failure that the job retries by itself after `inMs`. */
   retrying: z.object({ stage: z.string(), attempt: z.number().int(), of: z.number().int(), inMs: z.number().int(), message: z.string() }),
+  /** The task's durable job state was missing at start-up, so its job was rebuilt from the ledger. */
+  job_rebuilt: z.object({ status: TaskStatus, reason: z.string() }),
   /** Someone asked to try a failed or stopped task again (the app's Retry, or the API). */
   retry_requested: z.object({ by: z.string() }),
   /** Network requests from the task's sandbox, as the egress proxy saw them (aggregated per host and window). */

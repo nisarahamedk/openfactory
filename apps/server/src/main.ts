@@ -174,7 +174,7 @@ async function main() {
       },
     },
   );
-  log("resumed tasks", { count: await jobs.resumeAll() });
+  log("resumed tasks", await jobs.resumeAll());
 
   // Late outcomes: reverts, follow-up fixes, incidents and deploys for tasks merged in the last windowDays.
   const outcomeCfg = loadOutcomeConfig(pluginEnv, cfg.FACTORY_FILE);
@@ -332,9 +332,12 @@ async function main() {
   const server = serve({ fetch: app.fetch, port: cfg.PORT }, (i) => log("listening", { port: i.port }));
 
   const poller = p.signals
-    ? await p.signals.start(async (s) => {
-        await onSignal(s);
-      })
+    ? await p.signals.start(
+        async (s) => {
+          await onSignal(s);
+        },
+        { cursors: store },
+      )
     : null;
 
   const shutdown = async () => {

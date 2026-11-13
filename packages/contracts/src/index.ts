@@ -218,9 +218,15 @@ export type Signal = z.infer<typeof Signal>;
 // ───────────────────────────── plugin interfaces ─────────────────────────────
 
 /** Where signals come from. `start` calls `onSignal` with parsed signals only. */
+/** Where a signal source got to, kept by the factory (Postgres) so a restart catches up instead of guessing. */
+export interface CursorStore {
+  cursor(key: string): Promise<string | null>;
+  setCursor(key: string, at: string): Promise<void>;
+}
+
 export interface SignalSource {
   readonly name: string;
-  start(onSignal: (signal: Signal) => Promise<void>): Promise<{ stop(): Promise<void> }>;
+  start(onSignal: (signal: Signal) => Promise<void>, opts?: { cursors?: CursorStore }): Promise<{ stop(): Promise<void> }>;
 }
 
 /**

@@ -25,6 +25,7 @@ export const rollouts = pgTable("of_rollouts", {
   history: jsonb("history").$type<RolloutState[]>().notNull(),
 });
 
+/** Migration 2 (see migrations.ts). Released: never edit it; add a new numbered migration instead. */
 export const APP_MIGRATION = `
 CREATE TABLE IF NOT EXISTS of_views (
   id text PRIMARY KEY,
@@ -66,6 +67,17 @@ export class AppStore {
 
   async migrate(): Promise<void> {
     for (const stmt of APP_MIGRATION.split(";").map((s) => s.trim()).filter(Boolean)) await this.db.execute(sql.raw(stmt));
+  }
+
+  /** Where a signal source got to (e.g. a repo's poll cursor), so a restart catches up instead of guessing. */
+  async cursor(key: string): Promise<string | null> {
+    const res = (await this.db.execute(sql`SELECT at FROM of_cursors WHERE key = ${key}`)) as unknown as { rows?: Array<{ at: string }> } | Array<{ at: string }>;
+    const rows = Array.isArray(res) ? res : (res.rows ?? []);
+    return rows[0]?.at ?? null;
+  }
+
+  async setCursor(key: string, at: string): Promise<void> {
+    await this.db.execute(sql`INSERT INTO of_cursors (key, at, updated_at) VALUES (${key}, ${at}, ${this.now()}) ON CONFLICT (key) DO UPDATE SET at = EXCLUDED.at, updated_at = EXCLUDED.updated_at`);
   }
 
   /**

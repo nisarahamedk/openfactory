@@ -43,7 +43,7 @@ export const events = pgTable(
   (t) => [index("of_events_task").on(t.taskId, t.seq), uniqueIndex("of_events_dedupe").on(t.dedupeKey)],
 );
 
-/** Idempotent schema setup, run at server start. Small enough not to need a migration tool yet. */
+/** Migration 1 (see migrations.ts). Released: never edit it; add a new numbered migration instead. */
 export const MIGRATION = `
 CREATE TABLE IF NOT EXISTS of_tasks (
   id text PRIMARY KEY,
