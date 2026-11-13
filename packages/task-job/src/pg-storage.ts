@@ -34,10 +34,14 @@ export class PostgresJobStorage implements Storage {
     private readonly mem: MemoryStorage,
     private readonly log: CommitLog,
     private readonly lease: Lease,
+    private readonly onBroken: (error: unknown) => void,
   ) {}
 
-  /** Open a task's job state: replay its log into memory. `lease` must be held (JobLog.acquire). */
-  static async open(log: CommitLog, lease: Lease, context: Context): Promise<PostgresJobStorage> {
+  /**
+   * Open a task's job state: replay its log into memory. `lease` must be held (JobLog.acquire). `onBroken` is told
+   * once when a write fails, so the owner can close the job and reopen it from the log.
+   */
+  static async open(log: CommitLog, lease: Lease, context: Context, onBroken: (error: unknown) => void = () => {}): Promise<PostgresJobStorage> {
     const mem = new MemoryStorage();
     for (const c of await log.commits(lease.taskId)) {
       let seq: Seq | undefined;
@@ -45,7 +49,7 @@ export class PostgresJobStorage implements Storage {
       if (r.refused !== undefined || Number(seq) !== c.seq)
         throw new Error(`replaying ${lease.taskId}'s job log diverged at seq ${c.seq}${r.refused !== undefined ? `: ${String(r.refused)}` : ` (got ${String(seq)})`}`);
     }
-    return new PostgresJobStorage(mem, log, lease);
+    return new PostgresJobStorage(mem, log, lease, onBroken);
   }
 
   private usable(): void {
@@ -71,6 +75,8 @@ export class PostgresJobStorage implements Storage {
           );
         } catch (e) {
           this.broken = e;
+          // After this call settles: the owner closes the job, and close waits for the commits underway.
+          setTimeout(() => this.onBroken(e), 0);
           throw e;
         }
       }
