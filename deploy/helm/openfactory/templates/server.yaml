@@ -189,11 +189,13 @@ spec:
             - { name: AUTH_PROVIDER, value: {{ .provider | quote }} }
             - { name: DASHBOARD_PUBLIC_URL, value: {{ required "dashboard.auth.publicUrl is required with sign-in" .publicUrl | quote }} }
             - { name: AUTH_ADMINS, value: {{ join "," .admins | quote }} }
+            - { name: AUTH_ENGINEERS, value: {{ join "," (.engineers | default list) | quote }} }
             - { name: AUTH_VIEWERS, value: {{ join "," .viewers | quote }} }
             - { name: AUTH_DEFAULT_ROLE, value: {{ .defaultRole | quote }} }
             - { name: AUTH_GITHUB_ORG, value: {{ .githubOrg | quote }} }
             - { name: OIDC_ISSUER, value: {{ .oidcIssuer | quote }} }
             - { name: OIDC_LOGIN_CLAIM, value: {{ .oidcLoginClaim | quote }} }
+            - { name: OIDC_EMAIL_DOMAINS, value: {{ join "," (.oidcEmailDomains | default list) | quote }} }
             {{- $s := required "dashboard.auth.secret is required with sign-in" .secret }}
             - name: AUTH_CLIENT_ID
               valueFrom: { secretKeyRef: { name: {{ $s }}, key: AUTH_CLIENT_ID } }

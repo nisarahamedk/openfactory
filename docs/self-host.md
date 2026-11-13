@@ -97,7 +97,9 @@ Without sign-in, the app has one shared password and a name picker. Anyone with 
 | engineer | also ask for tasks, write to them, stop and retry them, turn them into benchmarks |
 | admin | also change factory rollouts and start paid benchmark runs |
 
-Everyone who can sign in gets `defaultRole` (engineer), except the logins listed under `admins` or `viewers`.
+Nobody gets in by default. Logins listed under `admins`, `engineers` or `viewers` always get in with that role. Beyond the lists, the org is the gate: members of `githubOrg` (GitHub) or anyone your OIDC issuer signs in. Those unlisted people get `defaultRole`, which is viewer unless you change it. With GitHub and no `githubOrg` (a personal account), only the lists get in, and the app refuses to start if all three are empty.
+
+The role is worked out again on every request, so taking someone off a list takes effect at once. Someone who leaves the GitHub org keeps access until their session ends (12 hours).
 
 **GitHub** (the login is the GitHub login, which matches who asked for tasks):
 
@@ -108,7 +110,8 @@ Everyone who can sign in gets `defaultRole` (engineer), except the logins listed
 **OIDC** (Okta, Entra ID, Google, Keycloak, Dex):
 
 1. Create a web client with redirect URI `<app URL>/auth/callback`.
-2. Choose the claim that matches people's code-host logins (`oidcLoginClaim`). The part before any `@` is used.
+2. Choose the claim that matches people's code-host logins (`oidcLoginClaim`). The part before any `@` is used, so the issuer must be your org's own IdP: `alice@a.com` and `alice@b.com` would be the same login.
+3. With a shared issuer such as Google, set `oidcEmailDomains` (e.g. `{acme.com}`), or anyone with a Google account could sign in as a viewer.
 
 Then install it:
 

@@ -78,12 +78,15 @@ dashboard:
     provider: none        # github | oidc | none
     secret: ""            # Secret name with the keys above
     publicUrl: ""         # the app's public URL; register <publicUrl>/auth/callback with the provider
+    # Default deny: listed logins always get in; others only via githubOrg (github) or the issuer (oidc).
     admins: []            # logins that may change rollouts and start paid benchmark runs
+    engineers: []         # logins that may ask for, stop and retry tasks
     viewers: []           # logins that may only read
-    defaultRole: engineer # everyone else who can sign in
-    githubOrg: ""         # github: only this org's members may sign in
-    oidcIssuer: ""        # oidc: e.g. https://acme.okta.com
+    defaultRole: viewer   # unlisted people the org lets in
+    githubOrg: ""         # github: members of this org may sign in; empty = only the lists above
+    oidcIssuer: ""        # oidc: one org's own IdP, e.g. https://acme.okta.com
     oidcLoginClaim: preferred_username
+    oidcEmailDomains: []  # oidc: only these email domains (set this with a shared issuer such as Google)
   resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 256Mi } }
 
 persistence:

@@ -20,9 +20,11 @@ import { authFromEnv } from "./auth.js";
  *   AUTH_CLIENT_ID, AUTH_CLIENT_SECRET   the OAuth app or OIDC client
  *   DASHBOARD_PUBLIC_URL  this app's public URL (callback: <url>/auth/callback)
  *   SESSION_SECRET      32+ random characters, signs session cookies
- *   AUTH_ADMINS, AUTH_VIEWERS  comma-separated logins; everyone else gets AUTH_DEFAULT_ROLE (default engineer)
- *   AUTH_GITHUB_ORG     github: only this org's members may sign in
- *   OIDC_ISSUER, OIDC_LOGIN_CLAIM  oidc: the issuer, and the claim used as login (default preferred_username)
+ *   AUTH_ADMINS, AUTH_ENGINEERS, AUTH_VIEWERS  comma-separated logins with each role (always let in)
+ *   AUTH_DEFAULT_ROLE   role of unlisted people the org lets in (default viewer)
+ *   AUTH_GITHUB_ORG     github: members of this org may sign in. With no org, only listed logins may.
+ *   OIDC_ISSUER, OIDC_LOGIN_CLAIM  oidc: the issuer (one org's IdP), and the claim used as login (default preferred_username)
+ *   OIDC_EMAIL_DOMAINS  oidc: only these email domains may sign in (needed with a shared issuer such as Google)
  */
 const env = z
   .object({

@@ -84,7 +84,7 @@ describe("sign-in", () => {
     const forged = await ok.request("/auth/callback?code=good&state=wrong", { headers: { cookie: stateCookie } });
     expect(decodeURIComponent(forged.headers.get("location")!)).toContain("didn't match");
 
-    const auth = new Auth({ provider: "github", clientId: "c", clientSecret: "s", publicUrl: "https://app.example", sessionSecret: SECRET, admins: [], viewers: [], defaultRole: "engineer" });
+    const auth = new Auth({ provider: "github", clientId: "c", clientSecret: "s", publicUrl: "https://app.example", sessionSecret: SECRET, admins: [], engineers: ["ada"], viewers: [], defaultRole: "engineer" });
     const token = auth.sign(auth.newSession("ada", null));
     const [body, mac] = token.split(".");
     const evil = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(body!, "base64url").toString()), role: "admin" })).toString("base64url");
@@ -114,6 +114,62 @@ describe("sign-in", () => {
     expect(() => authFromEnv({ AUTH_PROVIDER: "github" })).toThrow("AUTH_CLIENT_ID");
     const a = authFromEnv({ AUTH_PROVIDER: "oidc", AUTH_CLIENT_ID: "c", AUTH_CLIENT_SECRET: "s", DASHBOARD_PUBLIC_URL: "https://app.example", SESSION_SECRET: SECRET, OIDC_ISSUER: "https://idp.example", AUTH_ADMINS: "boss" })!;
     expect(a.roleOf("BOSS")).toBe("admin");
-    expect(a.roleOf("ada")).toBe("engineer");
+    expect(a.roleOf("ada")).toBe("viewer");
+  });
+
+  it("lets nobody in by default: github with no org and no lists refuses to start", () => {
+    const base = { AUTH_PROVIDER: "github", AUTH_CLIENT_ID: "c", AUTH_CLIENT_SECRET: "s", DASHBOARD_PUBLIC_URL: "https://app.example", SESSION_SECRET: SECRET };
+    expect(() => authFromEnv(base)).toThrow("lets any GitHub user in");
+    const listed = authFromEnv({ ...base, AUTH_ENGINEERS: "ada", AUTH_ADMINS: "boss" })!;
+    expect(listed.roleOf("ada")).toBe("engineer");
+    expect(listed.roleOf("boss")).toBe("admin");
+    expect(listed.roleOf("stranger")).toBeNull();
+    expect(authFromEnv({ ...base, AUTH_GITHUB_ORG: "acme" })!.roleOf("member")).toBe("viewer");
+  });
+
+  it("refuses a GitHub user on no list when there is no org, and lets a listed one in", async () => {
+    const stranger = make("stranger", true, { githubOrg: null, admins: [], viewers: [], engineers: ["ada"] });
+    const s = await signIn(stranger.app);
+    expect(decodeURIComponent(s.cb.headers.get("location")!)).toContain("isn't allowed into this factory");
+    expect(s.session).toBe("");
+    expect(stranger.gh.seen).not.toContain("/user/memberships/orgs/acme");
+
+    const ada = make("ada", false, { githubOrg: null, admins: [], viewers: [], engineers: ["ada"] });
+    const a = await signIn(ada.app);
+    expect(a.cb.headers.get("location")).toBe("/tasks");
+  });
+
+  it("lets a listed person in without org membership, and gives unlisted members the default role", async () => {
+    const listed = make("watcher", false);
+    expect((await signIn(listed.app)).cb.headers.get("location")).toBe("/tasks");
+    const auth = new Auth({ provider: "github", clientId: "c", clientSecret: "s", publicUrl: "https://app.example", sessionSecret: SECRET, admins: [], viewers: [], defaultRole: "viewer", githubOrg: "acme" });
+    expect(auth.newSession("member", null).role).toBe("viewer");
+  });
+
+  it("works the role out again on every request, so removing someone takes effect at once", () => {
+    const admins = ["boss"];
+    const auth = new Auth({ provider: "github", clientId: "c", clientSecret: "s", publicUrl: "https://app.example", sessionSecret: SECRET, admins, viewers: [], engineers: ["ada"], defaultRole: "viewer" });
+    const boss = auth.sign(auth.newSession("boss", null));
+    const ada = auth.sign(auth.newSession("ada", null));
+    expect(auth.session(boss)?.role).toBe("admin");
+    admins.length = 0;
+    expect(auth.session(boss)).toBeNull();
+    auth.cfg.viewers.push("ada");
+    expect(auth.session(ada)?.role).toBe("engineer");
+    (auth.cfg.engineers as string[]).length = 0;
+    expect(auth.session(ada)?.role).toBe("viewer");
+  });
+
+  it("with OIDC_EMAIL_DOMAINS, refuses emails from other domains", async () => {
+    const f = (async (url: string) => {
+      const u = new URL(url);
+      if (u.pathname === "/.well-known/openid-configuration") return Response.json({ authorization_endpoint: "https://idp.example/auth", token_endpoint: "https://idp.example/token", userinfo_endpoint: "https://idp.example/userinfo" });
+      if (u.pathname === "/token") return Response.json({ access_token: "at" });
+      if (u.pathname === "/userinfo") return Response.json({ preferred_username: "alice@other.com", email: "alice@other.com", email_verified: true });
+      return new Response("?", { status: 404 });
+    }) as unknown as typeof fetch;
+    const auth = new Auth({ provider: "oidc", clientId: "c", clientSecret: "s", publicUrl: "https://app.example", sessionSecret: SECRET, admins: [], viewers: [], defaultRole: "viewer", oidcIssuer: "https://idp.example", oidcEmailDomains: ["acme.com"], fetch: f });
+    const { url, state } = await auth.start("/");
+    await expect(auth.finish({ code: "x", state: new URL(url).searchParams.get("state")!, cookie: state })).rejects.toThrow("Only company accounts");
   });
 });

@@ -7,6 +7,12 @@
  *   engineer  also asks for tasks, writes to them, stops and retries them, turns them into benchmarks
  *   admin     also changes factory rollouts and starts paid benchmark runs
  *
+ * Who may sign in (default deny): anyone on AUTH_ADMINS, AUTH_ENGINEERS or AUTH_VIEWERS; plus, when the org is
+ * the gate, members of AUTH_GITHUB_ORG (github) or anyone the OIDC issuer signs in (oidc, so the issuer must be
+ * one org's own IdP; use OIDC_EMAIL_DOMAINS with a shared issuer such as Google). Unlisted people let in by the
+ * org get `defaultRole`, viewer unless set. The role is worked out again on every request, so removing someone
+ * from a list takes effect at once; leaving the GitHub org takes effect when their session ends (12 h).
+ *
  * With no provider configured the app falls back to the shared password and the name picker (dev only).
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -25,8 +31,9 @@ export type AuthConfig = {
   publicUrl: string;
   /** At least 32 characters; signs session cookies. */
   sessionSecret: string;
-  /** Logins with each role. Anyone else allowed in gets `defaultRole`. */
+  /** Logins with each role. Anyone else the org lets in gets `defaultRole`. */
   admins: string[];
+  engineers?: string[];
   viewers: string[];
   defaultRole: Role;
   /** github: only members of this org may sign in (needs the read:org scope). */
@@ -36,6 +43,8 @@ export type AuthConfig = {
   /** oidc: the issuer (discovery at <issuer>/.well-known/openid-configuration) and the claim used as login. */
   oidcIssuer?: string;
   oidcLoginClaim?: string;
+  /** oidc: only emails at these domains may sign in (needed with a shared issuer such as Google). */
+  oidcEmailDomains?: string[];
   sessionHours?: number;
   fetch?: typeof fetch;
   now?: () => number;
@@ -83,18 +92,36 @@ export class Auth {
 
   session(cookie: string | undefined): Session | null {
     const s = this.unsign<Session>(cookie);
-    return s && typeof s.login === "string" && s.exp > this.now() ? s : null;
+    if (!s || typeof s.login !== "string" || !(s.exp > this.now())) return null;
+    // The role comes from the lists as they are now, not as they were at sign-in.
+    const role = this.roleOf(s.login);
+    return role ? { ...s, role } : null;
   }
 
-  roleOf(login: string): Role {
+  /** The role a login has from the lists alone, or null when it is on none of them. */
+  listedRole(login: string): Role | null {
     const l = login.toLowerCase();
-    if (this.cfg.admins.some((a) => a.toLowerCase() === l)) return "admin";
-    if (this.cfg.viewers.some((v) => v.toLowerCase() === l)) return "viewer";
-    return this.cfg.defaultRole;
+    const on = (xs: string[] | undefined) => (xs ?? []).some((x) => x.toLowerCase() === l);
+    if (on(this.cfg.admins)) return "admin";
+    if (on(this.cfg.engineers)) return "engineer";
+    if (on(this.cfg.viewers)) return "viewer";
+    return null;
+  }
+
+  /** Whether the org itself vouches for people (GitHub org membership, or the OIDC issuer). */
+  private get orgGate(): boolean {
+    return this.cfg.provider === "oidc" || !!this.cfg.githubOrg;
+  }
+
+  /** The role of a signed-in login, or null when they may not be in at all. */
+  roleOf(login: string): Role | null {
+    return this.listedRole(login) ?? (this.orgGate ? this.cfg.defaultRole : null);
   }
 
   newSession(login: string, name: string | null): Session {
-    return { login, name, role: this.roleOf(login), exp: this.now() + (this.cfg.sessionHours ?? 12) * 3600_000 };
+    const role = this.roleOf(login);
+    if (!role) throw new Error(`${login} isn't allowed into this factory. Ask a factory admin to add you.`);
+    return { login, name, role, exp: this.now() + (this.cfg.sessionHours ?? 12) * 3600_000 };
   }
 
   // ── the sign-in flow ──
@@ -157,7 +184,8 @@ export class Auth {
     const headers = { authorization: `Bearer ${t.access_token}`, accept: "application/vnd.github+json", "user-agent": "openfactory" };
     const user = (await (await this.f(`${api}/user`, { headers })).json()) as { login?: string; name?: string | null };
     if (!user.login) throw new Error("GitHub didn't say who you are. Please try again.");
-    if (this.cfg.githubOrg) {
+    // People on a list get in without the org check; everyone else needs active membership.
+    if (this.cfg.githubOrg && !this.listedRole(user.login)) {
       const m = await this.f(`${api}/user/memberships/orgs/${encodeURIComponent(this.cfg.githubOrg)}`, { headers });
       const body = m.ok ? ((await m.json()) as { state?: string }) : null;
       if (body?.state !== "active") throw new Error(`Only members of ${this.cfg.githubOrg} can sign in to this factory.`);
@@ -191,6 +219,11 @@ export class Auth {
     const claim = this.cfg.oidcLoginClaim ?? "preferred_username";
     const raw = info[claim];
     if (typeof raw !== "string" || raw === "") throw new Error(`The identity provider didn't send "${claim}". Ask an admin to set OIDC_LOGIN_CLAIM.`);
+    const domains = (this.cfg.oidcEmailDomains ?? []).map((d) => d.toLowerCase());
+    if (domains.length) {
+      const email = typeof info.email === "string" ? info.email.toLowerCase() : "";
+      if (!domains.includes(email.split("@")[1] ?? "") || info.email_verified === false) throw new Error("Only company accounts can sign in to this factory.");
+    }
     // Logins are matched to code-host logins (who asked, reviewers), so keep the part before any @.
     const login = raw.split("@")[0]!;
     return { login, name: typeof info.name === "string" ? info.name : null };
@@ -208,18 +241,28 @@ export function authFromEnv(env: Record<string, string | undefined>): Auth | nul
     return v;
   };
   const list = (k: string) => (env[k] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  const role = env.AUTH_DEFAULT_ROLE ?? "engineer";
+  const role = env.AUTH_DEFAULT_ROLE ?? "viewer";
   if (role !== "viewer" && role !== "engineer" && role !== "admin") throw new Error("AUTH_DEFAULT_ROLE must be viewer, engineer or admin");
+  const clientId = need("AUTH_CLIENT_ID");
+  const clientSecret = need("AUTH_CLIENT_SECRET");
+  const publicUrl = need("DASHBOARD_PUBLIC_URL");
+  const sessionSecret = need("SESSION_SECRET");
+  const admins = list("AUTH_ADMINS");
+  const engineers = list("AUTH_ENGINEERS");
+  const viewers = list("AUTH_VIEWERS");
+  if (provider === "github" && !env.AUTH_GITHUB_ORG && !admins.length && !engineers.length && !viewers.length)
+    throw new Error("AUTH_PROVIDER=github lets any GitHub user in unless you set AUTH_GITHUB_ORG or list people in AUTH_ADMINS, AUTH_ENGINEERS or AUTH_VIEWERS");
   return new Auth({
     provider,
-    clientId: need("AUTH_CLIENT_ID"),
-    clientSecret: need("AUTH_CLIENT_SECRET"),
-    publicUrl: need("DASHBOARD_PUBLIC_URL"),
-    sessionSecret: need("SESSION_SECRET"),
-    admins: list("AUTH_ADMINS"),
-    viewers: list("AUTH_VIEWERS"),
+    clientId,
+    clientSecret,
+    publicUrl,
+    sessionSecret,
+    admins,
+    engineers,
+    viewers,
     defaultRole: role,
     githubOrg: env.AUTH_GITHUB_ORG || null,
-    ...(provider === "oidc" ? { oidcIssuer: need("OIDC_ISSUER"), oidcLoginClaim: env.OIDC_LOGIN_CLAIM || "preferred_username" } : {}),
+    ...(provider === "oidc" ? { oidcIssuer: need("OIDC_ISSUER"), oidcLoginClaim: env.OIDC_LOGIN_CLAIM || "preferred_username", oidcEmailDomains: list("OIDC_EMAIL_DOMAINS") } : {}),
   });
 }
