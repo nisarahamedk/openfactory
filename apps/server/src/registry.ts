@@ -26,6 +26,7 @@ import {
 import { parse } from "yaml";
 import { z } from "zod";
 
+/** Short names. Some vendors serve several abstractions with different packages (k8s workspace vs k8s secrets). */
 const ALIASES: Record<string, string> = {
   github: "@openfactory/github",
   acp: "@openfactory/agent-acp",
@@ -33,6 +34,9 @@ const ALIASES: Record<string, string> = {
   local: "@openfactory/workspace-local",
   devspace: "@openfactory/env-devspace",
   dxfake: "@openfactory/metrics-dxfake",
+  litellm: "@openfactory/models-litellm",
+  infisical: "@openfactory/secrets-infisical",
+  "secrets:k8s": "@openfactory/secrets-k8s",
 };
 
 export type Selection = { name: string; options: Record<string, unknown> };
@@ -65,6 +69,8 @@ export function selectionsFromEnv(env: Record<string, string | undefined>): Sele
   };
   if ((env.SIGNALS ?? "poll") !== "webhook") s.signals = { name: "github", options: {} };
   if (env.DXFAKE_URL && env.DXFAKE_TOKEN) s.metrics = { name: "dxfake", options: {} };
+  if (env.LITELLM_ADMIN_URL && env.LITELLM_MASTER_KEY) s.modelGateway = { name: "litellm", options: {} };
+  if (env.SECRETS_PLUGIN) s.secrets = { name: env.SECRETS_PLUGIN, options: {} };
   return s;
 }
 
@@ -100,13 +106,13 @@ export class ProviderRegistry {
     private readonly importer: Importer = (pkg) => import(pkg) as Promise<Mod>,
   ) {}
 
-  static packageFor(name: string): string {
-    return ALIASES[name] ?? (name.includes("/") ? name : `@openfactory/provider-${name}`);
+  static packageFor(name: string, key?: AbstractionKey): string {
+    return (key && ALIASES[`${key}:${name}`]) ?? ALIASES[name] ?? (name.includes("/") ? name : `@openfactory/provider-${name}`);
   }
 
   async build<K extends AbstractionKey>(key: K, sel: Selection, envOverrides: Record<string, string> = {}): Promise<Abstractions[K]> {
     if (key === "devEnvironment" && sel.name === "none") return noEnvironment() as Abstractions[K];
-    const pkg = ProviderRegistry.packageFor(sel.name);
+    const pkg = ProviderRegistry.packageFor(sel.name, key);
     const mod = await this.importer(pkg);
     const env = { ...this.env, ...envOverrides };
     const make = mod.provider?.provides[key];

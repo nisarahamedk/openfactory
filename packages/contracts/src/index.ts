@@ -287,6 +287,53 @@ export interface EnvironmentHandle {
 }
 
 /**
+ * Model access for agents (LiteLLM, Bedrock, Portkey...). Each task gets its
+ * own credentials with its own budget, so one runaway task can't spend the
+ * factory's budget, and the org's real key never enters a sandbox.
+ */
+export interface ModelGateway {
+  readonly name: string;
+  /**
+   * Env vars the agent process needs for this task (base URL and per-task key).
+   * Safe to call again: the same task gets the same credentials.
+   */
+  forTask(taskId: TaskId, budget: { usd: number }): Promise<Record<string, string>>;
+  /** What the task has spent, as the gateway counts it; null when it doesn't know. */
+  spend(taskId: TaskId): Promise<{ usd: number } | null>;
+  /** Stops the task's credentials working. Safe to call twice. */
+  revoke(taskId: TaskId): Promise<void>;
+}
+
+/** What a caller asks Secrets to issue. Short-lived where the provider can; static otherwise. */
+export type SecretRequest = { kind: "git"; repo: RepoRef; access: "read" | "write" };
+
+export interface IssuedSecret {
+  value: string;
+  /** null when the provider can only hand out a long-lived value (its README says so). */
+  expiresAt: string | null;
+}
+
+/** Where the factory's own credentials come from (Infisical, Vault, cloud secret managers, k8s Secrets). */
+export interface Secrets {
+  readonly name: string;
+  /** A named secret. Throws SecretNotFound when it doesn't exist. */
+  get(name: string): Promise<string>;
+  /** A credential for one purpose and scope, e.g. a push token for one repo. */
+  issue(request: SecretRequest): Promise<IssuedSecret>;
+}
+
+/** The secret does not exist in the provider. */
+export class SecretNotFound extends Error {
+  readonly code = "secret_not_found" as const;
+  constructor(
+    readonly secretName: string,
+    readonly provider: string,
+  ) {
+    super(`Secret ${secretName} not found in ${provider}`);
+  }
+}
+
+/**
  * A scorer reads one task record (plus its event log, for timing and CI facts)
  * and returns a score, or null if it doesn't apply yet.
  */
@@ -323,9 +370,21 @@ export type Abstractions = {
   workspace: Workspace;
   devEnvironment: Environment;
   metrics: MetricsSink;
+  modelGateway: ModelGateway;
+  secrets: Secrets;
 };
 export type AbstractionKey = keyof Abstractions;
-export const ABSTRACTION_KEYS = ["codeForge", "signals", "chat", "agent", "workspace", "devEnvironment", "metrics"] as const satisfies readonly AbstractionKey[];
+export const ABSTRACTION_KEYS = [
+  "codeForge",
+  "signals",
+  "chat",
+  "agent",
+  "workspace",
+  "devEnvironment",
+  "metrics",
+  "modelGateway",
+  "secrets",
+] as const satisfies readonly AbstractionKey[];
 
 export interface ProviderContext {
   /** Options for this provider from factory.yaml (`codeForge: { github: { ... } }`), or {} . */
@@ -377,3 +436,44 @@ export const ReplayResult = z.object({
   notes: z.string(),
 });
 export type ReplayResult = z.infer<typeof ReplayResult>;
+
+// ───────────────────────────── evidence ─────────────────────────────
+
+/** A stored evidence file as read back from an EvidenceStore. */
+export type StoredEvidence = { bytes: Uint8Array; contentType: string };
+
+/**
+ * Where evidence files (screenshots, videos, logs, transcripts) are kept and served from.
+ * Keys are `<taskId>/<name>`; names are `[A-Za-z0-9._-]{1,200}`. Providers: disk, any S3-API store.
+ */
+export interface EvidenceStore {
+  readonly name: string;
+  /** Store bytes under `<taskId>/<name>`, replacing any earlier file of that name. */
+  put(taskId: string, name: string, bytes: Uint8Array, contentType: string): Promise<{ key: string; url: string }>;
+  /** Read a stored file back, or null if there is none. Invalid keys read as null. */
+  get(key: string): Promise<StoredEvidence | null>;
+  /** The URL a reviewer opens for this key (does not check that it exists). */
+  url(key: string): string;
+}
+
+const EVIDENCE_NAME = /^[A-Za-z0-9._-]{1,200}$/;
+
+/** Build and validate an evidence key; throws on names that could escape the task's folder. */
+export function evidenceKey(taskId: string, name: string): string {
+  if (!EVIDENCE_NAME.test(taskId) || !EVIDENCE_NAME.test(name) || name === "." || name === ".." || taskId === "." || taskId === "..")
+    throw new Error(`invalid evidence name: ${taskId}/${name}`);
+  return `${taskId}/${name}`;
+}
+
+/** Split and validate a key; null when it isn't a valid `<taskId>/<name>`. */
+export function parseEvidenceKey(key: string): { taskId: string; name: string } | null {
+  const parts = key.split("/");
+  if (parts.length !== 2) return null;
+  const [taskId = "", name = ""] = parts;
+  try {
+    evidenceKey(taskId, name);
+    return { taskId, name };
+  } catch {
+    return null;
+  }
+}

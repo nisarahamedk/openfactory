@@ -267,7 +267,7 @@ const run = promisify(execFile);
  */
 export class GitHubBundlePusher {
   constructor(
-    private readonly opts: { token: () => string | Promise<string>; remoteUrl?: (repo: RepoRef) => string },
+    private readonly opts: { token: (repo: RepoRef) => string | Promise<string>; remoteUrl?: (repo: RepoRef) => string },
   ) {}
 
   async push(repo: RepoRef, branch: string, bundle: Uint8Array): Promise<void> {
@@ -279,7 +279,7 @@ export class GitHubBundlePusher {
       const git = (...args: string[]) => run("git", args, { cwd: dir, maxBuffer: 64 * 1024 * 1024 });
       await git("init", "-q", "--bare", "repo.git");
       await run("git", ["--git-dir", "repo.git", "fetch", "-q", file, `+refs/heads/${branch}:refs/heads/${branch}`], { cwd: dir });
-      const token = await this.opts.token();
+      const token = await this.opts.token(repo);
       const auth = Buffer.from(`x-access-token:${token}`).toString("base64");
       await run(
         "git",

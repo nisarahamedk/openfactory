@@ -8,14 +8,13 @@ import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
 import { GitHubBundlePusher, GitHubClient, parseWebhook } from "@openfactory/github";
-import type { AgentHarness, MetricsSink, Signal } from "@openfactory/contracts";
+import type { AgentHarness, MetricsSink, Signal, TaskId } from "@openfactory/contracts";
 import { FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
 import { TaskJobs } from "@openfactory/task-job";
 import { fileEvidenceStore, createApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { liteLlmModelKeys } from "./model-keys.js";
 import { loadSelections, ProviderRegistry } from "./registry.js";
 
 const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), msg, ...fields }));
@@ -68,17 +67,16 @@ async function main() {
       workspace,
       environment,
       evidence,
-      pusher: new GitHubBundlePusher({ token: () => cfg.GITHUB_TOKEN }),
-      modelKeys:
-        cfg.LITELLM_ADMIN_URL && cfg.LITELLM_MASTER_KEY
-          ? liteLlmModelKeys({
-              adminUrl: cfg.LITELLM_ADMIN_URL,
-              masterKey: cfg.LITELLM_MASTER_KEY,
-              maxBudgetUsd: cfg.MAX_TASK_USD,
-              models: cfg.TASK_KEY_MODELS.split(",").map((m) => m.trim()),
-              envNames: { key: "ANTHROPIC_API_KEY" },
-            })
-          : null,
+      // Push credentials come from Secrets when configured (per repo, write), else the server's GitHub token.
+      pusher: new GitHubBundlePusher({
+        token: async (repo) => (p.secrets ? (await p.secrets.issue({ kind: "git", repo, access: "write" })).value : cfg.GITHUB_TOKEN),
+      }),
+      modelKeys: p.modelGateway
+        ? {
+            forTask: (taskId: string) => p.modelGateway!.forTask(taskId as TaskId, { usd: cfg.MAX_TASK_USD }),
+            revoke: (taskId: string) => p.modelGateway!.revoke(taskId as TaskId),
+          }
+        : null,
       scorers: factScorers,
       sinks,
       config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/" },
