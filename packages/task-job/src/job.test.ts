@@ -78,7 +78,7 @@ function world() {
     name: "fake-agent",
     model: "fake",
     async openSession(input) {
-      envs.push(input.env ?? {});
+      envs.push({ ...(input.env ?? {}), MODEL: input.model ?? "" });
       const sessionId = input.resumeSessionId ?? `sess-${sessions.length + 1}`;
       sessions.push(sessionId);
       return {
@@ -164,12 +164,13 @@ describe("task job", () => {
         foremanModel: { provider: "foreman-faux", modelId: "haiku" },
         factoryVersion: () => "fv_test",
         harnessInfo: { name: "fake-agent", model: "fake" },
+        modelRouting: { default: "fake", routes: [{ model: "cheap", labels: ["ui"] }] },
       },
     );
 
     const actor = { login: "nisar", isBot: false };
     const base = { repo, at: new Date().toISOString(), actor };
-    const labeled: Signal = { ...base, id: "d1", type: "issue_labeled", issueNumber: 7, label: "factory", title: "Dark mode", body: "Add it" };
+    const labeled: Signal = { ...base, id: "d1", type: "issue_labeled", issueNumber: 7, label: "factory", title: "Dark mode", body: "Add it", labels: ["factory", "ui"] };
     const a = await jobs.handle(labeled);
     expect(a.kind).toBe("start_task");
     expect((await jobs.handle(labeled)).kind).toBe("ignore"); // duplicate delivery
@@ -185,6 +186,8 @@ describe("task job", () => {
     expect(w.posts.some((p) => p.to === 41 && p.md.includes("Ready for review") && p.md.includes("![Feature at 1]"))).toBe(true);
     expect(w.life).toEqual(["env.sleep", "ws.sleep"]);
     expect(w.envs[0]?.GH_TOKEN).toBe("t");
+    expect(w.envs[0]?.MODEL).toBe("cheap");
+    expect(r.harness.model).toBe("cheap");
     expect(w.envs[0]?.ANTHROPIC_API_KEY).toBe(`key-${taskId}`);
 
     // A question in the issue goes to the foreman, not the worker.

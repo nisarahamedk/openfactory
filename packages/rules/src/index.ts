@@ -121,3 +121,42 @@ const NEXT: Record<TaskStatus, TaskStatus[]> = {
 export function canMove(from: TaskStatus, to: TaskStatus): boolean {
   return from === to || NEXT[from].includes(to);
 }
+
+// ───────────────────────────── model routing ─────────────────────────────
+
+/** One routing rule: the first rule that matches picks the worker model for a new task. */
+export type ModelRoute = {
+  model: string;
+  /** Matches when the issue has any of these labels (case-insensitive). */
+  labels?: string[];
+  /** Matches when the title contains any of these words (case-insensitive). */
+  keywords?: string[];
+};
+
+export type ModelRouting = {
+  /** The model when no route matches (and the harness's default model). */
+  default: string;
+  routes: ModelRoute[];
+};
+
+/**
+ * Pick the worker model for a new task. A `model:<name>` label wins over every route
+ * (so a person can force a model per issue); otherwise the first matching route, else the default.
+ * Pure and deterministic, so the choice is reproducible from the ledger's task_created data.
+ */
+export function pickModel(
+  task: { title: string; labels: string[] },
+  routing: ModelRouting,
+): { model: string; reason: string } {
+  const labels = task.labels.map((l) => l.toLowerCase());
+  const forced = labels.find((l) => l.startsWith("model:"));
+  if (forced) return { model: forced.slice("model:".length).trim(), reason: `label ${forced}` };
+  const title = task.title.toLowerCase();
+  for (const r of routing.routes) {
+    const label = r.labels?.find((l) => labels.includes(l.toLowerCase()));
+    if (label) return { model: r.model, reason: `label ${label}` };
+    const word = r.keywords?.find((k) => new RegExp(`\\b${k.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(title));
+    if (word) return { model: r.model, reason: `title mentions "${word}"` };
+  }
+  return { model: routing.default, reason: "default" };
+}

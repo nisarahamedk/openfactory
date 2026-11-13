@@ -25,6 +25,8 @@ export interface AcpAgentSpec {
   command: string[];
   /** Environment for the agent process (model proxy URL, task key, model). */
   env: Record<string, string>;
+  /** Env vars that select a model for one session (model routing). Without it, a per-task model is ignored. */
+  modelEnv?: (model: string) => Record<string, string>;
   /** Session mode to switch to after open; null keeps the agent's default. */
   modeId: string | null;
   /** Called with stdout lines that are not ACP messages, and with stderr. */
@@ -83,9 +85,11 @@ export class AcpHarness implements AgentHarness {
     systemPrompt: string;
     resumeSessionId: string | null;
     env?: Record<string, string>;
+    model?: string;
   }): Promise<AgentSession> {
-    // The harness's own settings (model proxy, model) win over the task's env.
-    const proc = await input.workspace.spawn(this.spec.command, { cwd: input.cwd, env: { ...this.spec.env, ...input.env } });
+    // The task's env (per-task proxy key, git token) and model win over the harness defaults.
+    const modelEnv = input.model && input.model !== this.model && this.spec.modelEnv ? this.spec.modelEnv(input.model) : {};
+    const proc = await input.workspace.spawn(this.spec.command, { cwd: input.cwd, env: { ...this.spec.env, ...modelEnv, ...input.env } });
     const peer = new JsonRpcPeer(proc.stdin, proc.stdout, this.spec.log);
     const session = new AcpSession(peer, proc, this.spec);
     peer.start();

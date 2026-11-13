@@ -16,7 +16,7 @@ import { promptTemplates, TaskJobs } from "@openfactory/task-job";
 import { fileEvidenceStore, createApp } from "./app.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
-import { loadSelections, ProviderRegistry } from "./registry.js";
+import { loadModelRouting, loadSelections, ProviderRegistry } from "./registry.js";
 
 const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), msg, ...fields }));
 
@@ -51,6 +51,8 @@ async function main() {
     return v;
   };
   const agent = need(p.agent, "agent");
+  const modelRouting = loadModelRouting(pluginEnv, cfg.FACTORY_FILE);
+  log("model routing", { routing: modelRouting });
   const workspace = need(p.workspace, "workspace");
   const environment = need(p.devEnvironment, "devEnvironment");
   const forge = need(p.codeForge, "codeForge");
@@ -99,6 +101,7 @@ async function main() {
       foremanModel: { provider: FOREMAN_PROVIDER, modelId: cfg.FOREMAN_MODEL },
       factoryVersion: () => cfg.FACTORY_VERSION,
       harnessInfo: { name: agent.name, model: agent.model },
+      modelRouting,
     },
   );
   log("resumed tasks", { count: await jobs.resumeAll() });
@@ -157,6 +160,7 @@ async function main() {
     providers: Object.fromEntries(Object.entries(selections).map(([k, s]) => [k, { name: s!.name, options: redact(s!.options) }])),
     agent: { name: agent.name, model: agent.model },
     foreman: { model: cfg.FOREMAN_MODEL },
+    modelRouting,
     rules: { label: cfg.FACTORY_LABEL, maxTaskUsd: cfg.MAX_TASK_USD, maxReviewRounds: cfg.MAX_REVIEW_ROUNDS, maxNudges: cfg.MAX_NUDGES },
     prompts: { ...promptTemplates(cfg.BASE_BRANCH), foreman: FOREMAN_INSTRUCTIONS },
   });
