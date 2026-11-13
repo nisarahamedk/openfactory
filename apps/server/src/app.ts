@@ -149,10 +149,17 @@ export function createApp(d: AppDeps): Hono {
     });
   }
 
+  // Screenshots and test output are public so they render in PRs. Transcripts hold the agent's whole session
+  // (code, prompts, tool output), so they need the API token.
   app.get("/evidence/:taskId/:file", async (c) => {
-    const f = await d.evidence.read(c.req.param("taskId"), decodeURIComponent(c.req.param("file")));
+    const name = decodeURIComponent(c.req.param("file"));
+    const isPrivate = name.startsWith("transcript-");
+    if (isPrivate && d.apiToken && c.req.header("authorization") !== `Bearer ${d.apiToken}`)
+      return c.json({ code: "UNAUTHORIZED", message: "bearer token required" }, 401);
+    const f = await d.evidence.read(c.req.param("taskId"), name);
     if (!f) return c.notFound();
-    return new Response(new Uint8Array(f.bytes), { headers: { "content-type": f.type, "cache-control": "public, max-age=86400", "x-content-type-options": "nosniff" } });
+    const cache = isPrivate ? "private, no-store" : "public, max-age=86400";
+    return new Response(new Uint8Array(f.bytes), { headers: { "content-type": f.type, "cache-control": cache, "x-content-type-options": "nosniff" } });
   });
   return app;
 }

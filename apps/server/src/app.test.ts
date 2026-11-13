@@ -45,6 +45,11 @@ it("serves tasks, signals and evidence behind the API token", async () => {
   const res = await app.request("/evidence/task_a1/abc-shot.png");
   expect(res.headers.get("content-type")).toBe("image/png");
   expect((await app.request("/evidence/task_a1/..%2Fx")).status).toBe(404);
+  await evidence.put("task_a1", "transcript-1.jsonl", new Uint8Array([123, 125]), "application/x-ndjson");
+  expect((await app.request("/evidence/task_a1/transcript-1.jsonl")).status).toBe(401);
+  const tr = await app.request("/evidence/task_a1/transcript-1.jsonl", { headers: { authorization: "Bearer tok" } });
+  expect(tr.status).toBe(200);
+  expect(tr.headers.get("cache-control")).toBe("private, no-store");
 });
 
 it("parses config", () => {
