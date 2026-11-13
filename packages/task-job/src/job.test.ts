@@ -326,3 +326,46 @@ describe("recovery", () => {
     await jobs.close();
   }, 30_000);
 });
+
+describe("restart", () => {
+  it("rebuilds a mid-work task from the ledger when its job state is gone", async () => {
+    const w = world();
+    const ledger = new Ledger(drizzle(new PGlite()));
+    await ledger.migrate();
+    const { record } = await ledger.createTask({
+      id: "task_lost" as never,
+      factoryVersion: "fv_test",
+      source: { kind: "github_issue", repo, issueNumber: 11, url: "u" },
+      title: "Was working",
+      ask: "Do it",
+      harness: { name: "fake-agent", model: "fake" },
+    });
+    await ledger.setStatus(record.id, "working");
+    const faux = fauxProvider({ provider: "foreman-faux", models: [{ id: "haiku" }] });
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const jobs = new TaskJobs(
+      {
+        ledger,
+        rules: { label: "factory", botLogins: [], maxTaskUsd: 10, maxReviewRounds: 3 },
+        chat: w.chat,
+        codeForge: w.codeForge,
+        agent: w.agent,
+        workspace: w.workspace,
+        environment: w.environment,
+        modelKeys: null,
+        evidence: { put: async (t, name) => ({ url: `https://factory/evidence/${t}/${name}` }) },
+        scorers: factScorers,
+        sinks: [],
+        config: { baseBranch: "main", workerImage: null, agentEnv: {}, maxNudges: 1, branchPrefix: "factory/" },
+        log: () => {},
+      },
+      { dataDir: mkdtempSync(join(tmpdir(), "jobs-")), models, foremanModel: { provider: "foreman-faux", modelId: "haiku" }, factoryVersion: () => "fv_test", harnessInfo: { name: "fake-agent", model: "fake" } },
+    );
+    expect(await jobs.resumeAll()).toEqual({ resumed: 0, rebuilt: 1 });
+    await jobs.idle(record.id);
+    expect((await ledger.getTask(record.id))!.status).toBe("awaiting_review");
+    expect((await ledger.events(record.id)).some((e) => e.type === "job_rebuilt")).toBe(true);
+    await jobs.close();
+  }, 30_000);
+});

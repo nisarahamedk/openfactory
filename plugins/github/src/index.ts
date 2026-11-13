@@ -18,6 +18,7 @@ import {
   Signal,
   type Chat,
   type CodeForge,
+  type CursorStore,
   type RepoRef,
   type SignalSource,
 } from "@openfactory/contracts";
@@ -187,6 +188,9 @@ export function signalsFromPoll(
  * Polls a repo for labels, comments, reviews, merges and closes. Needs no inbound network, which suits
  * self-hosted factories behind a firewall. Repeats are harmless: the job de-duplicates by signal id.
  */
+/** At most this many pages of 100 per list per poll (a long outage catches up over several polls). */
+const MAX_PAGES = 10;
+
 export class GitHubPollingSource implements SignalSource {
   readonly name = "github-poll";
   constructor(
@@ -195,14 +199,51 @@ export class GitHubPollingSource implements SignalSource {
   ) {}
 
   async pollOnce(repo: RepoRef, since: string): Promise<Signal[]> {
+    return (await this.poll(repo, since)).signals;
+  }
+
+  /**
+   * One poll of a repo. `resumeAt` is set when a list was cut at the page limit: the next poll must start
+   * there (its last item) rather than at "now", or the rest of that list would be skipped.
+   */
+  private async poll(repo: RepoRef, since: string): Promise<{ signals: Signal[]; resumeAt: string | null }> {
+    this.cutAt = null;
     const [events, comments, reviewComments, reviews] = await Promise.all([
-      this.gh.request<IssueEvent[]>("GET", `${r(repo)}/issues/events?per_page=100`),
-      this.gh.request<IssueComment[]>("GET", `${r(repo)}/issues/comments?since=${since}&per_page=100&sort=created&direction=asc`),
-      this.gh.request<ReviewComment[]>("GET", `${r(repo)}/pulls/comments?since=${since}&per_page=100&sort=created&direction=asc`),
+      this.issueEventsSince(repo, since),
+      this.pagesSince<IssueComment>(`${r(repo)}/issues/comments?since=${since}&sort=created&direction=asc`),
+      this.pagesSince<ReviewComment>(`${r(repo)}/pulls/comments?since=${since}&sort=created&direction=asc`),
       this.reviewBodies(repo, since),
     ]);
-    const recent = events.filter((e) => e.created_at >= since);
-    return [...signalsFromPoll(repo, { events: recent, comments: comments.filter((c) => c.created_at >= since), reviewComments }), ...reviews];
+    const signals = [...signalsFromPoll(repo, { events, comments: comments.filter((c) => c.created_at >= since), reviewComments }), ...reviews];
+    return { signals, resumeAt: this.cutAt };
+  }
+
+  private cutAt: string | null = null;
+
+  /** Issue events newest first, page by page until older than `since` (GitHub has no `since` here). */
+  private async issueEventsSince(repo: RepoRef, since: string): Promise<IssueEvent[]> {
+    const out: IssueEvent[] = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const batch = await this.gh.request<IssueEvent[]>("GET", `${r(repo)}/issues/events?per_page=100&page=${page}`);
+      out.push(...batch.filter((e) => e.created_at >= since));
+      if (batch.length < 100 || batch.some((e) => e.created_at < since)) return out;
+    }
+    this.opts.log?.("poll hit the page limit; older events may be missed", { repo: `${repo.owner}/${repo.name}`, since });
+    return out;
+  }
+
+  /** A `since` list, oldest first, every page (up to MAX_PAGES). */
+  private async pagesSince<T extends { created_at: string }>(path: string): Promise<T[]> {
+    const out: T[] = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const batch = await this.gh.request<T[]>("GET", `${path}&per_page=100&page=${page}`);
+      out.push(...batch);
+      if (batch.length < 100) return out;
+    }
+    const last = out.at(-1)?.created_at ?? null;
+    if (last && (this.cutAt === null || last < this.cutAt)) this.cutAt = last;
+    this.opts.log?.("poll hit the page limit; the next poll resumes from the last item", { path, resumeAt: last });
+    return out;
   }
 
   /** Top-level review bodies ("Request changes: ...") on recently updated open PRs. */
@@ -221,23 +262,37 @@ export class GitHubPollingSource implements SignalSource {
     return out;
   }
 
-  async start(onSignal: (signal: Signal) => Promise<void>): Promise<{ stop(): Promise<void> }> {
+  /**
+   * Poll every repo forever. With a cursor store, each repo starts where the last run got to (so a server
+   * that was down for hours catches up), else `lookbackMs` ago. The cursor moves only after every signal of
+   * a poll was handled, minus a minute of overlap because GitHub's lists can lag; repeats are de-duplicated.
+   */
+  async start(onSignal: (signal: Signal) => Promise<void>, opts: { cursors?: CursorStore } = {}): Promise<{ stop(): Promise<void> }> {
     let stopped = false;
-    const cursors = new Map(this.opts.repos.map((x) => [`${x.owner}/${x.name}`, new Date(Date.now() - this.opts.lookbackMs).toISOString()]));
+    const fallback = new Date(Date.now() - this.opts.lookbackMs).toISOString();
+    const cursors = new Map<string, string>();
+    for (const x of this.opts.repos) {
+      const key = `${x.owner}/${x.name}`;
+      const stored = await opts.cursors?.cursor(`github-poll:${key}`).catch(() => null);
+      cursors.set(key, stored ?? fallback);
+    }
     const loop = async () => {
       while (!stopped) {
         for (const repo of this.opts.repos) {
           const key = `${repo.owner}/${repo.name}`;
           const startedAt = new Date(Date.now() - 60_000).toISOString(); // overlap: GitHub lists can lag
           try {
-            for (const s of await this.pollOnce(repo, cursors.get(key)!)) {
+            const { signals, resumeAt } = await this.poll(repo, cursors.get(key)!);
+            const next = resumeAt ?? startedAt;
+            for (const s of signals) {
               try {
                 await onSignal(s);
               } catch (e) {
                 this.opts.log?.("signal handler failed", { id: s.id, error: String(e) });
               }
             }
-            cursors.set(key, startedAt);
+            cursors.set(key, next);
+            await opts.cursors?.setCursor(`github-poll:${key}`, next).catch((e) => this.opts.log?.("cursor save failed", { repo: key, error: String(e) }));
           } catch (e) {
             this.opts.log?.("poll failed", { repo: key, error: String(e) });
           }
