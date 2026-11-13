@@ -472,6 +472,20 @@ export const Team = z.object({
 });
 export type Team = z.infer<typeof Team>;
 
+/**
+ * The team a task belongs to: the asker's team first (people move between repos), else the team that
+ * owns the task's repo. Null when neither is known.
+ */
+export function teamFor(teams: readonly Team[], task: { requestedBy?: string | null | undefined; repo: RepoRef }): Team | null {
+  const who = task.requestedBy?.toLowerCase();
+  const byPerson = who ? teams.find((t) => t.members.some((m) => m.login.toLowerCase() === who)) : undefined;
+  const repo = `${task.repo.owner}/${task.repo.name}`.toLowerCase();
+  return byPerson ?? teams.find((t) => t.repos.some((r) => r.toLowerCase() === repo)) ?? null;
+}
+
+/** The factory a task runs on: its team's factory, else the org default. */
+export const factoryFor = (teams: readonly Team[], task: { requestedBy?: string | null | undefined; repo: RepoRef }): string => teamFor(teams, task)?.factory ?? "default";
+
 /** Teams and their people, from the org's directory (GitHub teams, SCIM groups, or factory.yaml). */
 export interface Directory {
   readonly name: string;

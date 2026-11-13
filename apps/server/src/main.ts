@@ -237,9 +237,25 @@ async function main() {
     return { task: (await ledger.getTask(id))!, url };
   };
 
+  /** A person asks for a task in the app: open a labelled issue where the work belongs, then start it. */
+  const ask = async (input: { ask: string; repo: string | null; requestedBy: string }) => {
+    const known = cfg.repos.map((r) => `${r.owner}/${r.name}`);
+    const teamRepo = (await directory.teams()).find((t) => t.members.some((m) => m.login === input.requestedBy))?.repos.find((r) => known.includes(r));
+    const repoName = input.repo ?? teamRepo ?? known[0];
+    if (!repoName || !known.includes(repoName)) throw new Error(`The factory doesn't work in ${repoName ?? "any repo"} yet. Add it to FACTORY_REPOS.`);
+    const [owner, name] = repoName.split("/") as [string, string];
+    const repo = { host: "github" as const, owner, name };
+    const title = input.ask.split("\n")[0]!.trim().slice(0, 120) || "Task from the factory app";
+    const body = `${input.ask}\n\n_Asked by @${input.requestedBy} in the factory app._`;
+    const issue = await gh.request<{ number: number; html_url: string }>("POST", `/repos/${owner}/${name}/issues`, { title, body, labels: [cfg.FACTORY_LABEL] });
+    await onSignal({ type: "issue_labeled", id: `app-new:${repoName}#${issue.number}`, repo, at: new Date().toISOString(), actor: { login: input.requestedBy, isBot: false }, issueNumber: issue.number, label: cfg.FACTORY_LABEL, title, body, labels: [cfg.FACTORY_LABEL] });
+    return { issueUrl: issue.html_url, repo: repoName, issueNumber: issue.number };
+  };
+
   const app = createApp({
     ledger,
     store,
+    ask,
     teams: () => directory.teams(),
     factories: async () => factoryViews(org.factories, await directory.teams()),
     message,

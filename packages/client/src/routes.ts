@@ -89,6 +89,15 @@ export const SetRollout = z
   })
   .meta({ id: "SetRollout" });
 
+/** Body of POST /v1/tasks. */
+export const NewTaskRequest = z
+  .object({
+    ask: z.string().min(3).max(20_000).meta({ description: "What the person wants, in their words. The first line becomes the title." }),
+    repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).nullable().default(null).meta({ description: "owner/name; omit to let the factory pick from the person's team" }),
+    requestedBy: z.string().min(1).max(100),
+  })
+  .meta({ id: "NewTaskRequest" });
+
 /** Body of POST /v1/tasks/{id}/messages. */
 export const PostMessage = z.object({ author: z.string().min(1).max(100), text: z.string().min(1).max(10_000) }).meta({ id: "PostMessage" });
 
@@ -205,6 +214,14 @@ export const V1_ROUTES: RouteSpec[] = [
     operationId: "getBenchRun",
     summary: "One run with its results and report",
     responses: { 200: { description: "The run", schema: z.object({ run: BenchRun }) }, ...notFound },
+  },
+  {
+    method: "post",
+    path: "/tasks",
+    operationId: "createTask",
+    summary: "Ask for a task: opens an issue with the factory label in the repo (or the person's team repo) and starts it",
+    body: NewTaskRequest,
+    responses: { 202: { description: "Started", schema: z.object({ issueUrl: z.string(), repo: z.string(), issueNumber: z.number().int() }) }, ...bad },
   },
   {
     method: "post",

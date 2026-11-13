@@ -18,7 +18,7 @@ import type { AppStore, Ledger } from "@openfactory/ledger";
 import type { EvidenceStore } from "@openfactory/task-job";
 import { Hono } from "hono";
 import type { z } from "zod";
-import { buildOpenApi, CancelTask, EgressReport, FactoryApi, PostMessage, SaveView, SetRollout, type FactoryInfo, type FactoryView } from "@openfactory/client";
+import { buildOpenApi, CancelTask, EgressReport, FactoryApi, NewTaskRequest, PostMessage, SaveView, SetRollout, type FactoryInfo, type FactoryView } from "@openfactory/client";
 import { createMcpHttpHandler } from "@openfactory/mcp";
 
 const SAFE = /^[A-Za-z0-9._-]{1,200}$/;
@@ -67,6 +67,8 @@ export type AppDeps = {
   factories: () => Promise<FactoryView[]>;
   /** Write to a task as a person; null when the task is unknown. */
   message: (taskId: TaskId, author: string, text: string) => Promise<{ task: TaskRecord; url: string | null } | null>;
+  /** Ask for a new task from the app; throws a message for the person when it can't. */
+  ask: (input: { ask: string; repo: string | null; requestedBy: string }) => Promise<{ issueUrl: string; repo: string; issueNumber: number }>;
 };
 
 export function createApp(d: AppDeps): Hono {
@@ -129,6 +131,15 @@ export function createApp(d: AppDeps): Hono {
       recorded++;
     }
     return c.json({ recorded }, 202);
+  });
+  v1.post("/tasks", async (c) => {
+    const body = NewTaskRequest.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ code: "INVALID_REQUEST", message: "bad task request", issues: body.error.issues }, 400);
+    try {
+      return c.json(await d.ask(body.data), 202);
+    } catch (e) {
+      return c.json({ code: "INVALID_REQUEST", message: e instanceof Error ? e.message : String(e) }, 400);
+    }
   });
   v1.post("/tasks/:id/messages", async (c) => {
     const id = TaskId.safeParse(c.req.param("id"));

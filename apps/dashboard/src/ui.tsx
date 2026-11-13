@@ -190,6 +190,48 @@ details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-
 .form-sec h2{margin:0;font-size:15px;font-weight:600}.form-sec .d{color:var(--quiet);font-size:13.5px;margin:2px 0 14px}
 .field{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px 16px;align-items:center;font-size:14px}.field dt{color:var(--quiet)}.field dd{margin:0;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .ptabs{margin-bottom:12px}
+/* scope bar */
+.scope{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 12px;background:var(--sheet);border:1px solid var(--rule);border-radius:8px;margin-bottom:22px;font-size:13.5px;min-height:44px}
+.scope .lbl{color:var(--quiet);font-size:12.5px}
+.scope .path{display:flex;gap:6px;align-items:center}.scope .path a{font-weight:550}.scope .path a:hover{text-decoration:underline}.scope .path .sep{color:var(--quiet)}
+.scope .vr{width:1px;height:20px;background:var(--rule)}
+.scope .chip a{color:var(--quiet);margin-left:2px}.scope .chip a:hover{color:var(--ink)}
+.scope .grow{flex:1}
+.pop{position:relative}.pop>summary{display:inline-flex;align-items:center;gap:4px;color:var(--ink-2);height:26px;padding:0 6px;border-radius:5px}.pop>summary:hover{background:var(--hover)}
+.pop>.menu{position:absolute;z-index:20;top:32px;left:0;min-width:240px;max-height:420px;overflow:auto;background:var(--sheet);border:1px solid var(--rule-2);border-radius:8px;box-shadow:0 12px 32px rgba(10,20,25,.14);padding:6px}
+.pop.right>.menu{left:auto;right:0}
+.pop .menu a{display:flex;justify-content:space-between;gap:12px;padding:7px 10px;border-radius:5px;font-size:13.5px}.pop .menu a:hover{background:var(--hover)}.pop .menu a.on{font-weight:600}
+.pop .menu .h{font-size:12px;color:var(--quiet);padding:8px 10px 4px}
+.pop .menu form{display:grid;gap:8px;padding:6px}.pop .menu label{display:grid;gap:4px;font-size:12.5px;color:var(--quiet)}
+/* life bar: asked, agent work, PR, review, merged, after merge */
+.life{display:inline-flex;gap:3px;align-items:center}.life i{width:14px;height:4px;border-radius:2px;background:var(--rule);display:block}
+.life i.d{background:var(--ink)}.life i.n{background:var(--hivis);box-shadow:0 0 0 1px color-mix(in srgb,var(--ink) 20%,transparent)}.life i.ok{background:var(--good)}.life i.x{background:var(--bad)}
+.trow{display:grid;grid-template-columns:18px minmax(0,1fr) 96px 72px 64px;align-items:center;gap:14px;padding:11px 18px;border-top:1px solid var(--rule);font-size:14px;min-height:58px}
+.rows>.trow:first-child{border-top:0}.trow:hover{background:var(--hover)}.trow.needs{box-shadow:inset 3px 0 0 var(--hivis)}
+.trow .ttl{min-width:0}.trow .ttl a{font-weight:550;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.trow .ttl a:hover{text-decoration:underline}
+.trow .s2{font-size:13px;color:var(--quiet);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.trow .s2 .w{color:var(--ink-2)}
+.trow .r{text-align:right;font-size:13px;color:var(--ink-2)}
+/* explorer */
+.xp{display:grid;grid-template-columns:240px minmax(0,1fr);gap:16px}
+.xp .ctl{display:flex;flex-direction:column;gap:18px}
+.xp .ctl h4{margin:0 0 6px;font-size:12.5px;font-weight:500;color:var(--quiet)}
+.xp .opts{display:flex;flex-direction:column;gap:1px}.xp .opts a{padding:6px 10px;border-radius:5px;font-size:13.5px;color:var(--ink-2)}.xp .opts a:hover{background:var(--hover)}.xp .opts a.on{background:var(--ink);color:var(--on-ink);font-weight:550}
+.bars{display:grid;grid-template-columns:minmax(120px,200px) minmax(0,1fr) 120px;gap:10px 14px;align-items:center;font-size:13.5px}
+.bars .lab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bars .lab a:hover{text-decoration:underline}
+.bars .track{display:flex;flex-direction:column;gap:3px}
+.bars .bar{height:12px;border-radius:0 3px 3px 0;min-width:2px;display:block}
+.bars .val{text-align:right;font-variant-numeric:tabular-nums}.bars .val a:hover{text-decoration:underline}.bars .val .c{color:var(--quiet);font-size:12px;margin-left:4px}
+.sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}
+.views a{display:block;padding:8px 10px;border-radius:6px}.views a:hover{background:var(--hover)}.views .who{font-size:12px;color:var(--quiet)}
+.convo{display:flex;flex-direction:column;gap:2px}
+.say{display:grid;grid-template-columns:120px minmax(0,1fr) auto;gap:14px;padding:12px 0;border-top:1px solid var(--rule);font-size:14px}
+.say:first-child{border-top:0}.say .who{color:var(--quiet);font-size:13px}.say .who b{color:var(--ink);font-weight:600;display:block}.say .txt{white-space:pre-wrap;overflow-wrap:anywhere;max-width:80ch}.say .at{color:var(--quiet);font-size:12.5px}
+.say.agent .who b:before{content:"";display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--hivis);margin-right:6px;box-shadow:0 0 0 1px color-mix(in srgb,var(--ink) 25%,transparent)}
+.ask{display:flex;gap:8px;margin-top:14px}.ask textarea{flex:1;min-height:64px;padding:10px 12px;border:1px solid var(--rule-2);border-radius:8px;background:var(--sheet);color:var(--ink);font:inherit;font-size:14px;resize:vertical}
+.risk{display:inline-flex;align-items:center;gap:6px;font-weight:600}.risk i{width:9px;height:9px;border-radius:50%;display:inline-block}
+.risk.low i{background:var(--good)}.risk.medium i{background:var(--warn)}.risk.high i{background:var(--bad)}
+.who-list a{display:flex;justify-content:space-between;padding:10px 12px;border-radius:6px;border:1px solid var(--rule);background:var(--sheet);margin-bottom:6px}.who-list a:hover{border-color:var(--ink)}
+@media (max-width:900px){.xp{grid-template-columns:1fr}.bars{grid-template-columns:110px minmax(0,1fr) 90px}.trow{grid-template-columns:18px minmax(0,1fr) 64px;padding:10px 14px}.trow>:nth-child(3),.trow>:nth-child(4){display:none}.say{grid-template-columns:1fr}}
 /* mobile */
 .mtop{display:none}
 @media (max-width:900px){
@@ -225,6 +267,9 @@ document.querySelectorAll('.chart[data-points]').forEach(function(el){
 // ───────────────────────────── icons ─────────────────────────────
 
 const ICONS: Record<string, string> = {
+  inbox: '<path d="M2.5 11.5 5 4h10l2.5 7.5V16a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z"/><path d="M2.5 11.5h4l1 2h5l1-2h4"/>',
+  chart: '<path d="M3 17V9M8 17V3M13 17v-6M18 17v-9"/>',
+  factory: '<path d="M2.5 17V8l5 3V8l5 3V4h5v13z"/><path d="M6 14h1.5M10 14h1.5"/>',
   runs: '<path d="M4 5h12M4 10h12M4 15h12"/><circle cx="1.5" cy="5" r=".6"/><circle cx="1.5" cy="10" r=".6"/><circle cx="1.5" cy="15" r=".6"/>',
   env: '<circle cx="10" cy="10" r="7.5"/><path d="M2.5 10h15M10 2.5c2.2 2.3 2.2 12.7 0 15M10 2.5c-2.2 2.3-2.2 12.7 0 15"/>',
   apps: '<rect x="2.5" y="2.5" width="6" height="6" rx="1.5"/><rect x="11.5" y="2.5" width="6" height="6" rx="1.5"/><rect x="2.5" y="11.5" width="6" height="6" rx="1.5"/><rect x="11.5" y="11.5" width="6" height="6" rx="1.5"/>',
@@ -272,7 +317,7 @@ export function Icon({ name, size = 16 }: { name: keyof typeof ICONS | string; s
 
 // ───────────────────────────── shell ─────────────────────────────
 
-export type Nav = "runs" | "environments" | "apps" | "secrets" | "dashboard" | "activity" | "agents" | "automations" | "factory-runs" | "scorers" | "bench" | "versions";
+export type Nav = "inbox" | "tasks" | "insights" | "bench" | "factories" | "scorers" | "teams" | "none";
 
 export interface ShellProps {
   title: string;
@@ -281,6 +326,10 @@ export interface ShellProps {
   inboxCount?: number;
   refreshSec?: number;
   factory?: { name: string; version: string } | null;
+  /** Who is using the app (picked on /signin), or null. */
+  viewer?: string | null;
+  /** The scope bar, when the page has one. */
+  scope?: Child;
   children: Child;
 }
 
@@ -295,25 +344,14 @@ function NavLink({ href, icon, label, on, count }: { href: string; icon?: string
 }
 
 function NavItems({ p }: { p: ShellProps }) {
-  const f = p.factory ?? { name: "factory", version: "" };
   return (
     <>
-      <NavLink href="/runs" icon="runs" label="Runs" on={p.nav === "runs"} />
-      <NavLink href="/environments" icon="env" label="Environments" on={p.nav === "environments"} />
-      <NavLink href="/apps" icon="apps" label="MCPs and apps" on={p.nav === "apps"} />
-      <NavLink href="/secrets" icon="key" label="Secrets" on={p.nav === "secrets"} />
-      <div class="sect">Factories</div>
-      <div class="factory"><span class="fi">{f.name.slice(0, 1).toUpperCase()}</span><span>{f.name}</span>{f.version ? <span class="ver mono" title="Factory version">{f.version.slice(0, 10)}</span> : null}</div>
-      <div class="subnav">
-        <NavLink href="/" label="Dashboard" on={p.nav === "dashboard"} />
-        <NavLink href="/activity" label="Activity" on={p.nav === "activity"} count={p.inboxCount} />
-        <NavLink href="/agents" label="Agents" on={p.nav === "agents"} />
-        <NavLink href="/automations" label="Automations" on={p.nav === "automations"} />
-        <NavLink href="/runs?scope=factory" label="Runs" on={p.nav === "factory-runs"} />
-        <NavLink href="/scorers" label="Scorers" on={p.nav === "scorers"} />
-        <NavLink href="/bench" label="Benchmarks" on={p.nav === "bench"} />
-        <NavLink href="/versions" label="Versions" on={p.nav === "versions"} />
-      </div>
+      <NavLink href="/" icon="inbox" label="Inbox" on={p.nav === "inbox"} count={p.inboxCount} />
+      <NavLink href="/tasks" icon="runs" label="Tasks" on={p.nav === "tasks"} />
+      <NavLink href="/insights" icon="chart" label="Insights" on={p.nav === "insights"} />
+      <NavLink href="/bench" icon="bench" label="Benchmarks" on={p.nav === "bench"} />
+      <NavLink href="/factories" icon="factory" label="Factories" on={p.nav === "factories"} />
+      <NavLink href="/scorers" icon="scorer" label="Scorers" on={p.nav === "scorers"} />
     </>
   );
 }
@@ -340,14 +378,18 @@ export function Shell(p: ShellProps) {
         <div class="app">
           <aside class="side">
             <a href="/" class="brand"><span class="mark" aria-hidden="true" /><b>SlopwareFactory</b></a>
-            <form class="search" method="get" action="/runs">
+            <form class="search" method="get" action="/tasks">
               <Icon name="search" />
-              <input name="q" placeholder="Search runs" aria-label="Search runs" />
+              <input name="q" placeholder="Search tasks" aria-label="Search tasks" />
             </form>
             <NavItems p={p} />
-            <div class="foot"><span class="dot good" />Connected</div>
+            <div class="foot" style="flex-direction:column;align-items:flex-start;gap:4px">
+              <span>{p.viewer ? <>Signed in as <b style="color:var(--ink);font-weight:600">{p.viewer}</b></> : "Not signed in"} · <a class="link" href="/signin">{p.viewer ? "switch" : "sign in"}</a></span>
+              {p.factory?.version ? <span class="mono" title="Version the factory server runs">{p.factory.version.slice(0, 18)}</span> : null}
+            </div>
           </aside>
           <main>
+            {p.scope ?? null}
             {p.flash !== null ? <div class="flash"><Icon name="info" />{p.flash}</div> : null}
             {p.children}
           </main>

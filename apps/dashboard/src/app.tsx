@@ -1,15 +1,36 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { basicAuth } from "hono/basic-auth";
+import { getCookie, setCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
-import { TaskId, type LedgerEvent, type TaskRecord } from "@openfactory/contracts";
+import { factoryFor, TaskId, teamFor, ViewShare, type LedgerEvent, type SavedView, type Team, type TaskRecord } from "@openfactory/contracts";
 import { FactoryApiError, type FactoryApi, type FactoryInfo } from "@openfactory/client";
 import type { Child } from "hono/jsx";
-import { dailySeries, filterTasks, inbox, insights, isOpen, parseFilter, summarizeScorers, taskFacts, type TaskFacts } from "./insights.js";
+import { dailySeries, inbox, insights, isOpen, taskFacts, type TaskFacts } from "./insights.js";
+import { explore, filterQuery, matches, parseFilters, people, scopeParam, type Filters, type Scope } from "./model.js";
+import {
+  FactoriesPage,
+  FactoryPage,
+  FactoryTabs,
+  ImprovePage,
+  InboxPage,
+  InsightsPage,
+  NewTaskPage,
+  PersonPage,
+  SaveViewForm,
+  ScopeBar,
+  scopeOptions,
+  ScorersInScope,
+  SigninPage,
+  TasksPage,
+  TeamPage,
+  TeamsPage,
+  versionRows,
+} from "./pages.js";
 import { Shell, type Nav } from "./ui.js";
-import { ActivityPage, AgentPage, AgentsPage, AppsPage, AutomationsPage, BenchPage, DashboardPage, EnvironmentsPage, ErrorPage, parseTranscript, RunsPage, ScorersPage, SecretsPage, TaskPage, TranscriptPage, VersionsPage, type Stage } from "./views.js";
+import { AgentPage, AgentsPage, AppsPage, AutomationsPage, BenchPage, DashboardPage, EnvironmentsPage, ErrorPage, parseTranscript, SecretsPage, TaskPage, TranscriptPage } from "./views.js";
 
 /**
  * Event logs per task, refetched only when the task's updatedAt moves. Terminal tasks
@@ -42,10 +63,30 @@ export class EventCache {
   }
 }
 
+/** Refetch at most every `ttlMs`; on failure keep the last value (or the fallback). Never fails a page. */
+function cached<T>(load: () => Promise<T>, fallback: T, ttlMs = 60_000) {
+  let hit: { at: number; v: T } | null = null;
+  return async (): Promise<T> => {
+    if (hit && Date.now() - hit.at < ttlMs) return hit.v;
+    try {
+      hit = { at: Date.now(), v: await load() };
+    } catch {
+      hit = { at: Date.now() - ttlMs + 10_000, v: hit?.v ?? fallback };
+    }
+    return hit.v;
+  };
+}
+
+const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const msg = (path: string, m: string) => `${path}${path.includes("?") ? "&" : "?"}msg=${encodeURIComponent(m)}`;
+/** Only same-app paths are followed after a form post. */
+const safePath = (p: unknown, fallback = "/") => (typeof p === "string" && p.startsWith("/") && !p.startsWith("//") ? p : fallback);
+
 /**
- * The factory dashboard: runs, activity, cost and outcomes, agents, scorers and benchmarks.
+ * The factory app: inbox, tasks, Insights, teams and people, factories and their versions,
+ * benchmarks and scorers, all around one scope (org › team › person) and one set of filters.
  * Server-rendered; every read and write goes through the factory server's API.
- * Basic auth protects the whole page when a password is set.
+ * Basic auth protects the whole app when a password is set; the viewer picks who they are on /signin.
  */
 export function createDashboard(
   api: FactoryApi,
@@ -59,17 +100,14 @@ export function createDashboard(
     const tasks = await api.listTasks({ limit: LIMIT });
     return { tasks, facts: await cache.facts(tasks) };
   };
-  // The factory's config changes only on deploy; refetch at most once a minute and never fail a page on it.
-  let info: { at: number; f: FactoryInfo | null } = { at: 0, f: null };
-  const factory = async (): Promise<FactoryInfo | null> => {
-    if (Date.now() - info.at > 60_000) {
-      try {
-        info = { at: Date.now(), f: await api.factory() };
-      } catch {
-        info = { at: Date.now() - 50_000, f: info.f };
-      }
-    }
-    return info.f;
+  const factory = cached<FactoryInfo | null>(() => api.factory(), null);
+  const teamsOf = cached<Team[]>(() => api.teams(), [], 30_000);
+  type Factories = Awaited<ReturnType<FactoryApi["factories"]>>;
+  const loadFactories = () => cached<Factories>(() => api.factories(), { factories: [], rollouts: [] }, 10_000);
+  let factoriesOf = loadFactories();
+  /** Rollout changes show at once: start a fresh cache after a write. */
+  const factoriesCacheBust = () => {
+    factoriesOf = loadFactories();
   };
   const requireFactory = async () => {
     const f = await factory();
@@ -77,16 +115,42 @@ export function createDashboard(
     return f;
   };
   const name = opts.factoryName ?? "main";
-  const page = async (c: { req: { query(k: string): string | undefined } }, p: { title: string; nav: Nav; inboxCount?: number; refreshSec?: number | undefined; flash?: string | null }, body: Child) => {
+  const viewerOf = (c: Context) => {
+    const v = getCookie(c, "of_user");
+    return v && LOGIN.test(v) ? v : null;
+  };
+
+  type PageOpts = { title: string; nav: Nav; inboxCount?: number; refreshSec?: number | undefined; flash?: string | null; scope?: Child };
+  const page = async (c: Context, p: PageOpts, body: Child) => {
     const f = await factory();
     return (
-      <Shell title={p.title} nav={p.nav} flash={p.flash === undefined ? (c.req.query("msg") ?? null) : p.flash} inboxCount={p.inboxCount} refreshSec={p.refreshSec} factory={{ name, version: f?.version ?? "" }}>
+      <Shell title={p.title} nav={p.nav} flash={p.flash === undefined ? (c.req.query("msg") ?? null) : p.flash} inboxCount={p.inboxCount} refreshSec={p.refreshSec} factory={{ name, version: f?.version ?? "" }} viewer={viewerOf(c)} scope={p.scope}>
         {body}
       </Shell>
     );
   };
-  const inboxCount = (facts: TaskFacts[]) => inbox(facts, now()).length;
-  const days = (q: string | undefined) => ([7, 30, 90].includes(Number(q)) ? Number(q) : 30);
+
+  /** Everything a scoped page needs: filters from the query, tasks in scope, the scope bar. */
+  const scoped = async (c: Context, base: string, fallback?: Scope) => {
+    const viewer = viewerOf(c);
+    const f = parseFilters((k) => c.req.query(k), fallback ?? { kind: "org" });
+    const [{ tasks, facts }, teams] = await Promise.all([loadAll(), teamsOf()]);
+    const n = now();
+    const inScope = facts.filter((x) => matches(x, f, teams, n));
+    const bar = (extra?: Child) => <ScopeBar f={f} teams={teams} viewer={viewer} base={base} opts={scopeOptions(facts)} extra={extra} />;
+    const mineInbox = viewer ? inbox(facts.filter((x) => x.task.requestedBy === viewer), n).length : inbox(facts, n).length;
+    return { viewer, f, tasks, facts, inScope, teams, n, bar, inboxCount: mineInbox };
+  };
+  const pathOf = (c: Context) => {
+    const u = new URL(c.req.url);
+    u.searchParams.delete("msg");
+    u.searchParams.delete("view");
+    return `${u.pathname}${u.search}`;
+  };
+  const viewFor = async (c: Context): Promise<SavedView | null> => {
+    const id = c.req.query("view");
+    return id ? await api.view(id).catch(() => null) : null;
+  };
 
   app.get("/healthz", (c) => c.json({ ok: true }));
   const fontPath = createRequire(import.meta.url).resolve("@fontsource-variable/mona-sans/files/mona-sans-latin-standard-normal.woff2");
@@ -99,70 +163,98 @@ export function createDashboard(
 
   app.onError(async (err, c) => {
     if (err instanceof HTTPException) return err.getResponse();
-    const msg = err instanceof FactoryApiError ? err.message : err instanceof z.ZodError ? "The factory server returned data in an unexpected shape." : "Unexpected error.";
+    const m = err instanceof FactoryApiError ? err.message : err instanceof z.ZodError ? "The factory server returned data in an unexpected shape." : "Unexpected error.";
     if (!(err instanceof FactoryApiError)) console.error("dashboard:", err);
-    return c.html(<Shell title="Error" nav="dashboard" flash={null} factory={{ name, version: info.f?.version ?? "" }}><ErrorPage message={msg} /></Shell>, 502);
+    return c.html(<Shell title="Error" nav="none" flash={null} factory={{ name, version: "" }} viewer={viewerOf(c)}><ErrorPage message={m} /></Shell>, 502);
   });
 
+  // ── identity ──
+  app.get("/signin", async (c) => {
+    const [{ facts }, teams] = await Promise.all([loadAll(), teamsOf()]);
+    return c.html(await page(c, { title: "Sign in", nav: "none" }, <SigninPage people={people(facts, teams, { kind: "org" })} viewer={viewerOf(c)} back={safePath(c.req.query("back"))} />));
+  });
+  app.post("/signin", async (c) => {
+    const form = await c.req.parseBody();
+    const login = typeof form.login === "string" ? form.login.trim() : "";
+    if (!LOGIN.test(login)) return c.redirect(msg("/signin", "That doesn't look like a login."), 303);
+    setCookie(c, "of_user", login, { path: "/", httpOnly: true, sameSite: "Lax", maxAge: 60 * 60 * 24 * 365 });
+    return c.redirect(safePath(form.back), 303);
+  });
+
+  // ── inbox ──
   app.get("/", async (c) => {
-    const { facts } = await loadAll();
-    const d = days(c.req.query("days"));
-    return c.html(await page(c, { title: "Dashboard", nav: "dashboard", inboxCount: inboxCount(facts) }, <DashboardPage i={insights(facts, now(), d)} days={dailySeries(facts, now(), d)} now={now()} />));
+    const viewer = viewerOf(c);
+    const s = await scoped(c, "/", viewer ? { kind: "person", login: viewer } : { kind: "org" });
+    // The inbox ignores the period: anything still waiting on a person shows, however old.
+    const items = s.facts.filter((x) => matches(x, { ...s.f, days: 0 }, s.teams, s.n));
+    const live = items.some((x) => isOpen(x.task.status) && x.task.status !== "awaiting_review");
+    // A person also reviews for their team: teammates' PRs waiting on a reviewer.
+    const scope = s.f.scope;
+    const teamReviews =
+      scope.kind === "person"
+        ? s.facts.filter((x) => x.task.status === "awaiting_review" && x.task.requestedBy !== scope.login && s.teams.some((t) => t.members.some((m) => m.login === scope.login) && t.members.some((m) => m.login === x.task.requestedBy)))
+        : [];
+    return c.html(await page(c, { title: "Inbox", nav: "inbox", inboxCount: s.inboxCount, refreshSec: live ? 20 : undefined, scope: s.bar() }, <InboxPage facts={items} now={s.n} viewer={viewer} scope={scope} teamReviews={teamReviews} />));
   });
-  app.get("/metrics", (c) => c.redirect(`/${c.req.query("days") ? `?days=${c.req.query("days")}` : ""}`, 301));
+  app.get("/activity", (c) => c.redirect("/", 301));
 
-  app.get("/activity", async (c) => {
-    const { facts } = await loadAll();
-    const items = inbox(facts, now());
-    const q = c.req.query("stage");
-    const stage: Stage = q === "needs_you" || q === "working" || q === "review" || q === "merged" || q === "ended" ? q : "all";
-    const live = facts.some((f) => isOpen(f.task.status) && f.task.status !== "awaiting_review");
-    return c.html(await page(c, { title: "Activity", nav: "activity", inboxCount: items.length, refreshSec: live ? 20 : undefined }, <ActivityPage items={items} facts={facts} now={now()} stage={stage} />));
+  // ── tasks ──
+  app.get("/tasks", async (c) => {
+    const s = await scoped(c, "/tasks");
+    const current = await viewFor(c);
+    const save = <SaveViewForm path={pathOf(c)} viewer={s.viewer} teams={s.teams} current={current && current.owner === s.viewer ? current : null} />;
+    const title = current ? current.name : "Tasks";
+    return c.html(await page(c, { title, nav: "tasks", inboxCount: s.inboxCount, scope: s.bar() }, <TasksPage facts={s.inScope} f={s.f} now={s.n} saveForm={save} total={s.facts.length} />));
   });
+  app.get("/runs", (c) => c.redirect(`/tasks${c.req.query("q") ? `?q=${encodeURIComponent(c.req.query("q")!)}` : ""}`, 301));
 
-  app.get("/runs", async (c) => {
-    const { tasks, facts } = await loadAll();
-    const filter = parseFilter((k) => c.req.query(k));
-    const live = c.req.query("live") === "1";
-    const nav: Nav = c.req.query("scope") === "factory" ? "factory-runs" : "runs";
-    return c.html(
-      await page(c, { title: "Runs", nav, inboxCount: inboxCount(facts), refreshSec: live ? 15 : undefined },
-        <RunsPage tasks={filterTasks(tasks, filter)} all={tasks} filter={filter} facts={new Map(facts.map((f) => [f.task.id, f]))} now={now()} live={live} />),
-    );
+  app.get("/tasks/new", async (c) => {
+    const teams = await teamsOf();
+    const viewer = viewerOf(c);
+    const mine = teams.filter((t) => t.members.some((m) => m.login === viewer)).flatMap((t) => t.repos);
+    const repos = [...new Set([...mine, ...teams.flatMap((t) => t.repos)])];
+    return c.html(await page(c, { title: "New task", nav: "inbox" }, viewer ? <NewTaskPage repos={repos} label={(await factory())?.rules.label ?? "factory"} /> : <ErrorPage message="Sign in first, so the task is asked by you." />));
   });
-
-  app.get("/scorers", async (c) => {
-    const { facts } = await loadAll();
-    return c.html(await page(c, { title: "Scorers", nav: "scorers", inboxCount: inboxCount(facts) }, <ScorersPage scorers={summarizeScorers(facts.map((f) => f.task))} />));
+  app.post("/tasks/new", async (c) => {
+    const viewer = viewerOf(c);
+    if (!viewer) return c.redirect("/signin?back=/tasks/new", 303);
+    const form = await c.req.parseBody();
+    const ask = typeof form.ask === "string" ? form.ask.trim() : "";
+    const repo = typeof form.repo === "string" && form.repo !== "" ? form.repo : null;
+    try {
+      const r = await api.createTask({ ask, repo, requestedBy: viewer });
+      return c.redirect(msg("/", `Started. Issue ${r.repo}#${r.issueNumber} holds the conversation; the task shows here in a moment.`), 303);
+    } catch (err) {
+      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg("/tasks/new", `Couldn't start it: ${err.message}`), 303);
+      throw err;
+    }
   });
-
-  app.get("/versions", async (c) => {
-    const { tasks, facts } = await loadAll();
-    return c.html(await page(c, { title: "Versions", nav: "versions", inboxCount: inboxCount(facts) }, <VersionsPage tasks={tasks} />));
-  });
-
-  app.get("/agents", async (c) => c.html(await page(c, { title: "Agents", nav: "agents" }, <AgentsPage f={await requireFactory()} />)));
-  app.get("/agents/:role", async (c) => {
-    const role = c.req.param("role");
-    if (role !== "implementation" && role !== "foreman") return c.html(await page(c, { title: "Not found", nav: "agents", flash: null }, <ErrorPage message="No such agent." />), 404);
-    return c.html(await page(c, { title: role, nav: "agents" }, <AgentPage f={await requireFactory()} role={role} prompt={c.req.query("prompt") ?? "system"} mcpUrl={opts.mcpUrl ?? null} />));
-  });
-  app.get("/automations", async (c) => c.html(await page(c, { title: "Automations", nav: "automations" }, <AutomationsPage f={await requireFactory()} />)));
-  app.get("/apps", async (c) => c.html(await page(c, { title: "MCPs and apps", nav: "apps" }, <AppsPage f={await requireFactory()} mcpUrl={opts.mcpUrl ?? null} />)));
-  app.get("/secrets", async (c) => c.html(await page(c, { title: "Secrets", nav: "secrets" }, <SecretsPage f={await requireFactory()} />)));
-  app.get("/environments", async (c) => {
-    const [f, tasks] = await Promise.all([requireFactory(), api.listTasks({ limit: LIMIT })]);
-    return c.html(await page(c, { title: "Environments", nav: "environments" }, <EnvironmentsPage f={f} active={tasks.filter((t) => isOpen(t.status) && t.environment !== null)} />));
-  });
-  app.get("/factory", (c) => c.redirect("/agents", 301));
 
   app.get("/tasks/:id", async (c) => {
     const id = TaskId.safeParse(c.req.param("id"));
     const t = id.success ? await api.getTask(id.data) : null;
-    if (!id.success || t === null) return c.html(await page(c, { title: "Not found", nav: "runs", flash: null }, <ErrorPage message="No such task." />), 404);
-    const events = await cache.events(t);
+    if (!id.success || t === null) return c.html(await page(c, { title: "Not found", nav: "tasks", flash: null }, <ErrorPage message="No such task." />), 404);
+    const [events, teams, fs] = await Promise.all([cache.events(t), teamsOf(), factoriesOf()]);
     const live = isOpen(t.status) && t.status !== "awaiting_review";
-    return c.html(await page(c, { title: t.title, nav: "runs", refreshSec: live ? 15 : undefined }, <TaskPage t={t} events={events} facts={taskFacts(t, events)} now={now()} />));
+    const team = teamFor(teams, { requestedBy: t.requestedBy, repo: t.source.repo });
+    const fa = fs.factories.find((x) => x.slug === (team?.factory ?? "default")) ?? null;
+    return c.html(await page(c, { title: t.title, nav: "tasks", refreshSec: live ? 15 : undefined }, <TaskPage t={t} events={events} facts={taskFacts(t, events)} now={now()} viewer={viewerOf(c)} team={team} factory={fa} />));
+  });
+
+  app.post("/tasks/:id/messages", async (c) => {
+    const id = TaskId.parse(c.req.param("id"));
+    const viewer = viewerOf(c);
+    if (!viewer) return c.redirect(`/signin?back=/tasks/${id}`, 303);
+    const form = await c.req.parseBody();
+    const text = typeof form.text === "string" ? form.text.trim() : "";
+    if (text === "") return c.redirect(`/tasks/${id}`, 303);
+    try {
+      const r = await api.postMessage(id, { author: viewer, text: text.slice(0, 10_000) });
+      return c.redirect(msg(`/tasks/${id}`, r.url ? "Sent. It's on the PR too, and the agent picks it up now." : "Sent to the agent."), 303);
+    } catch (err) {
+      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(`/tasks/${id}`, `Couldn't send: ${err.message}`), 303);
+      throw err;
+    }
   });
 
   app.get("/tasks/:id/transcripts/:key", async (c) => {
@@ -170,9 +262,9 @@ export function createDashboard(
     const key = c.req.param("key");
     const t = id.success ? await api.getTask(id.data) : null;
     const body = t !== null && /^transcript-\d+\.jsonl$/.test(key) ? await api.transcript(t.id, key) : null;
-    if (t === null || body === null) return c.html(await page(c, { title: "Not found", nav: "runs", flash: null }, <ErrorPage message="No such transcript." />), 404);
+    if (t === null || body === null) return c.html(await page(c, { title: "Not found", nav: "tasks", flash: null }, <ErrorPage message="No such transcript." />), 404);
     const turn = Number(/^transcript-(\d+)/.exec(key)?.[1] ?? NaN);
-    return c.html(await page(c, { title: `Session · ${t.title}`, nav: "runs", flash: null }, <TranscriptPage t={t} turn={Number.isFinite(turn) ? turn : null} lines={parseTranscript(body)} />));
+    return c.html(await page(c, { title: `Session · ${t.title}`, nav: "tasks", flash: null }, <TranscriptPage t={t} turn={Number.isFinite(turn) ? turn : null} lines={parseTranscript(body)} />));
   });
 
   app.post("/tasks/:id/cancel", async (c) => {
@@ -180,11 +272,10 @@ export function createDashboard(
     const form = await c.req.parseBody();
     const reason = typeof form.reason === "string" && form.reason.trim() !== "" ? form.reason.trim().slice(0, 1000) : undefined;
     try {
-      await api.cancel(id, { by: "dashboard", ...(reason ? { reason } : {}) });
-      return c.redirect(`/tasks/${id}?msg=${encodeURIComponent("Stopped. The environment is asleep; comment on the issue or PR to resume.")}`, 303);
+      await api.cancel(id, { by: viewerOf(c) ?? "dashboard", ...(reason ? { reason } : {}) });
+      return c.redirect(msg(`/tasks/${id}`, "Stopped. The environment is asleep; write to the task to resume."), 303);
     } catch (err) {
-      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500)
-        return c.redirect(`/tasks/${id}?msg=${encodeURIComponent(`Couldn't stop: ${err.message}`)}`, 303);
+      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(`/tasks/${id}`, `Couldn't stop: ${err.message}`), 303);
       throw err;
     }
   });
@@ -193,19 +284,155 @@ export function createDashboard(
     const id = TaskId.parse(c.req.param("id"));
     try {
       const b = await api.addToBenchmark(id);
-      return c.redirect(`/bench?msg=${encodeURIComponent(`Added ${b.id} to the benchmark.`)}`, 303);
+      return c.redirect(msg("/bench", `Added ${b.id} to the benchmark.`), 303);
     } catch (err) {
-      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500)
-        return c.redirect(`/tasks/${id}?msg=${encodeURIComponent(`Couldn't add to benchmark: ${err.message}`)}`, 303);
+      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(`/tasks/${id}`, `Couldn't add to benchmark: ${err.message}`), 303);
       throw err;
     }
   });
 
+  // ── insights and saved views ──
+  app.get("/insights", async (c) => {
+    const s = await scoped(c, "/insights");
+    const ex = explore(s.inScope, { measure: c.req.query("measure") ?? "came_back", by: c.req.query("by") ?? "kind", split: c.req.query("split") ?? "none" }, s.teams, s.n);
+    const views = s.viewer ? await api.views(s.viewer).catch(() => []) : [];
+    const current = await viewFor(c);
+    const save = <SaveViewForm path={pathOf(c)} viewer={s.viewer} teams={s.teams} current={current && current.owner === s.viewer ? current : null} />;
+    return c.html(await page(c, { title: current?.name ?? "Insights", nav: "insights", inboxCount: s.inboxCount, scope: s.bar() }, <InsightsPage ex={ex} f={s.f} views={views} viewer={s.viewer} teams={s.teams} saveForm={save} now={s.n} />));
+  });
+  app.get("/overview", async (c) => {
+    const { facts } = await loadAll();
+    const d = [7, 30, 90].includes(Number(c.req.query("days"))) ? Number(c.req.query("days")) : 30;
+    return c.html(await page(c, { title: "Overview", nav: "insights" }, <DashboardPage i={insights(facts, now(), d)} days={dailySeries(facts, now(), d)} now={now()} />));
+  });
+  app.get("/metrics", (c) => c.redirect("/insights", 301));
+
+  app.get("/views/:id", async (c) => {
+    const v = await api.view(c.req.param("id"));
+    if (!v) return c.html(await page(c, { title: "Not found", nav: "insights", flash: null }, <ErrorPage message="No such view." />), 404);
+    return c.redirect(`${v.path}${v.path.includes("?") ? "&" : "?"}view=${v.id}`, 302);
+  });
+  app.post("/views", async (c) => {
+    const viewer = viewerOf(c);
+    if (!viewer) return c.redirect("/signin", 303);
+    const form = await c.req.parseBody();
+    const path = safePath(form.path, "/insights");
+    const shareRaw = typeof form.share === "string" ? form.share : "me";
+    const [shareKind, team] = shareRaw.startsWith("team:") ? ["team", shareRaw.slice(5)] : [shareRaw, null];
+    const share = ViewShare.safeParse(shareKind);
+    const nameV = typeof form.name === "string" ? form.name.trim().slice(0, 120) : "";
+    if (!share.success || nameV === "") return c.redirect(msg(path, "A view needs a name."), 303);
+    const v = await api.saveView({ ...(typeof form.id === "string" && form.id ? { id: form.id } : {}), name: nameV, path, owner: viewer, share: share.data, team });
+    const who = v.share === "me" ? "only you" : v.share === "team" ? `the ${v.team} team` : v.share === "org" ? "everyone in the org" : "anyone with the link";
+    return c.redirect(msg(`${path}${path.includes("?") ? "&" : "?"}view=${v.id}`, `Saved "${v.name}" for ${who}.`), 303);
+  });
+  app.post("/views/:id/delete", async (c) => {
+    const viewer = viewerOf(c);
+    if (!viewer) return c.redirect("/signin", 303);
+    const ok = await api.deleteView(c.req.param("id"), viewer);
+    return c.redirect(msg("/insights", ok ? "View deleted." : "Only its owner can delete a view."), 303);
+  });
+
+  // ── teams and people ──
+  app.get("/teams", async (c) => {
+    const s = await scoped(c, "/teams");
+    const inPeriod = s.facts.filter((x) => matches(x, { ...s.f, scope: { kind: "org" } }, s.teams, s.n));
+    return c.html(await page(c, { title: "Teams", nav: "teams", inboxCount: s.inboxCount, scope: s.bar() }, <TeamsPage teams={s.teams} facts={inPeriod} now={s.n} f={s.f} />));
+  });
+  app.get("/teams/:slug", async (c) => {
+    const slug = c.req.param("slug");
+    const s = await scoped(c, `/teams/${slug}`, { kind: "team", team: slug });
+    const team = s.teams.find((t) => t.slug === slug);
+    if (!team) return c.html(await page(c, { title: "Not found", nav: "teams", flash: null }, <ErrorPage message="No such team." />), 404);
+    const f: Filters = { ...s.f, scope: { kind: "team", team: slug } };
+    const facts = s.facts.filter((x) => matches(x, f, s.teams, s.n));
+    const [fs, views] = await Promise.all([factoriesOf(), s.viewer ? api.views(s.viewer).catch(() => []) : Promise.resolve([])]);
+    return c.html(
+      await page(c, { title: team.name, nav: "teams", inboxCount: s.inboxCount, scope: <ScopeBar f={f} teams={s.teams} viewer={s.viewer} base={`/teams/${slug}`} opts={scopeOptions(s.facts)} /> },
+        <TeamPage team={team} facts={facts} now={s.n} f={f} factory={fs.factories.find((x) => x.slug === team.factory) ?? null} views={views.filter((v) => v.share === "team" && v.team === slug)} viewer={s.viewer} />),
+    );
+  });
+  app.get("/people/:login", async (c) => {
+    const login = c.req.param("login");
+    if (!LOGIN.test(login)) return c.notFound();
+    const s = await scoped(c, `/people/${login}`, { kind: "person", login });
+    const f: Filters = { ...s.f, scope: { kind: "person", login } };
+    const facts = s.facts.filter((x) => matches(x, f, s.teams, s.n));
+    return c.html(await page(c, { title: login, nav: "teams", inboxCount: s.inboxCount, scope: <ScopeBar f={f} teams={s.teams} viewer={s.viewer} base={`/people/${login}`} opts={scopeOptions(s.facts)} /> }, <PersonPage login={login} teams={s.teams} facts={facts} now={s.n} f={f} viewer={s.viewer} />));
+  });
+
+  // ── factories ──
+  app.get("/factories", async (c) => {
+    const [{ facts }, fs, info, runs, teams] = await Promise.all([loadAll(), factoriesOf(), factory(), api.benchRuns().catch(() => []), teamsOf()]);
+    const rows = new Map(fs.factories.map((fa) => [fa.slug, versionRows(facts.filter((x) => factorySlugOf(x.task, teams) === fa.slug), runs, now())]));
+    return c.html(await page(c, { title: "Factories", nav: "factories" }, <FactoriesPage factories={fs.factories} rollouts={fs.rollouts} info={info} rows={rows} />));
+  });
+  app.get("/factories/:slug", async (c) => {
+    const slug = c.req.param("slug");
+    const [{ facts }, fs, info, runs, teams] = await Promise.all([loadAll(), factoriesOf(), factory(), api.benchRuns().catch(() => []), teamsOf()]);
+    const fa = fs.factories.find((x) => x.slug === slug);
+    if (!fa) return c.html(await page(c, { title: "Not found", nav: "factories", flash: null }, <ErrorPage message="No such factory." />), 404);
+    const r = await api.rollout(slug);
+    const rows = versionRows(facts.filter((x) => factorySlugOf(x.task, teams) === slug), runs, now());
+    return c.html(await page(c, { title: `${slug} factory`, nav: "factories" }, <FactoryPage fa={fa} info={info} rollout={r.rollout} history={r.history} rows={rows} viewer={viewerOf(c)} runs={runs} tabs={<FactoryTabs slug={slug} on={`/factories/${slug}`} />} />));
+  });
+  app.post("/factories/:slug/rollout", async (c) => {
+    const slug = c.req.param("slug");
+    const viewer = viewerOf(c);
+    if (!viewer) return c.redirect(`/signin?back=/factories/${slug}`, 303);
+    const form = await c.req.parseBody();
+    const s = (k: string) => (typeof form[k] === "string" && (form[k] as string).trim() !== "" ? (form[k] as string).trim() : null);
+    const share = Number(s("share") ?? 0);
+    try {
+      const r = await api.setRollout(slug, { live: s("live"), candidate: s("candidate"), share: Number.isFinite(share) ? share : 0, by: viewer, note: s("note") });
+      factoriesCacheBust();
+      const said = r.candidate ? `${r.candidate} now gets ${Math.round(r.share * 100)}% of new tasks.` : `New tasks run on ${r.live ?? "the server's version"}.`;
+      return c.redirect(msg(`/factories/${slug}`, said), 303);
+    } catch (err) {
+      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(`/factories/${slug}`, `Couldn't change the rollout: ${err.message}`), 303);
+      throw err;
+    }
+  });
+  app.get("/versions", (c) => c.redirect("/factories/default", 301));
+
+  const tabbed = async (c: Context, title: string, on: string, body: Child) =>
+    c.html(await page(c, { title, nav: "factories" }, <><FactoryTabs slug="default" on={on} />{body}</>));
+  app.get("/agents", async (c) => tabbed(c, "Agents", "/agents", <AgentsPage f={await requireFactory()} />));
+  app.get("/agents/:role", async (c) => {
+    const role = c.req.param("role");
+    if (role !== "implementation" && role !== "foreman") return c.html(await page(c, { title: "Not found", nav: "factories", flash: null }, <ErrorPage message="No such agent." />), 404);
+    return tabbed(c, role, "/agents", <AgentPage f={await requireFactory()} role={role} prompt={c.req.query("prompt") ?? "system"} mcpUrl={opts.mcpUrl ?? null} />);
+  });
+  app.get("/automations", async (c) => tabbed(c, "Automations", "/automations", <AutomationsPage f={await requireFactory()} />));
+  app.get("/apps", async (c) => tabbed(c, "MCPs and apps", "/apps", <AppsPage f={await requireFactory()} mcpUrl={opts.mcpUrl ?? null} />));
+  app.get("/secrets", async (c) => tabbed(c, "Secrets", "/secrets", <SecretsPage f={await requireFactory()} />));
+  app.get("/environments", async (c) => {
+    const [f, tasks] = await Promise.all([requireFactory(), api.listTasks({ limit: LIMIT })]);
+    return tabbed(c, "Environments", "/environments", <EnvironmentsPage f={f} active={tasks.filter((t) => isOpen(t.status) && t.environment !== null)} />);
+  });
+  app.get("/factory", (c) => c.redirect("/factories/default", 301));
+
+  // ── scorers and improve ──
+  app.get("/scorers", async (c) => {
+    const s = await scoped(c, "/scorers");
+    const fs = await factoriesOf();
+    const team = s.f.scope.kind === "team" ? (s.teams.find((t) => s.f.scope.kind === "team" && t.slug === s.f.scope.team) ?? null) : null;
+    return c.html(await page(c, { title: "Scorers", nav: "scorers", inboxCount: s.inboxCount, scope: s.bar() }, <ScorersInScope facts={s.inScope} factories={fs.factories} team={team} f={s.f} />));
+  });
+  app.get("/improve", async (c) => {
+    const s = await scoped(c, "/improve");
+    const team = s.f.scope.kind === "team" ? (s.teams.find((t) => s.f.scope.kind === "team" && t.slug === s.f.scope.team) ?? null) : null;
+    const [runs, r] = await Promise.all([api.benchRuns().catch(() => []), api.rollout(team?.factory ?? "default").catch(() => ({ rollout: null, history: [] }))]);
+    return c.html(await page(c, { title: "Improve", nav: "teams", inboxCount: s.inboxCount, scope: s.bar() }, <ImprovePage facts={s.inScope} now={s.n} f={s.f} runs={runs} team={team} rollout={r.rollout} />));
+  });
+
+  // ── benchmarks ──
   app.get("/bench", async (c) => {
     const [tasks, runs, all] = await Promise.all([api.benchTasks(), api.benchRuns(), api.listTasks({ limit: 500 })]);
     const versions = [...new Set(all.map((t) => t.factoryVersion))];
     return c.html(await page(c, { title: "Benchmarks", nav: "bench" }, <BenchPage tasks={tasks} runs={runs} versions={versions} models={opts.models} />));
   });
+  app.get("/bench/runs/:id", (c) => c.redirect(`/bench#${encodeURIComponent(c.req.param("id"))}`, 302));
 
   app.post("/bench/runs", async (c) => {
     const form = await c.req.parseBody({ all: true });
@@ -225,13 +452,16 @@ export function createDashboard(
         repeats: Number(str("repeats")),
         maxCostUsd: Number(str("maxCostUsd")),
       });
-      return c.redirect(`/bench?msg=${encodeURIComponent(`Started ${run.id}. Refresh to see results as they land.`)}`, 303);
+      return c.redirect(msg("/bench", `Started ${run.id}. Refresh to see results as they land.`), 303);
     } catch (err) {
-      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500)
-        return c.redirect(`/bench?msg=${encodeURIComponent(`Couldn't start the run: ${err.message}`)}`, 303);
+      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg("/bench", `Couldn't start the run: ${err.message}`), 303);
       throw err;
     }
   });
 
   return app;
 }
+
+const factorySlugOf = (t: TaskRecord, teams: readonly Team[]) => factoryFor(teams, { requestedBy: t.requestedBy, repo: t.source.repo });
+
+export { filterQuery, scopeParam };

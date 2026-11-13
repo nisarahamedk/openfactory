@@ -113,6 +113,10 @@ export class FactoryApi implements LedgerReader {
     return res.text();
   }
 
+  createTask(input: { ask: string; repo: string | null; requestedBy: string }): Promise<{ issueUrl: string; repo: string; issueNumber: number }> {
+    return this.call("POST", "/v1/tasks", z.object({ issueUrl: z.string(), repo: z.string(), issueNumber: z.number().int() }), input);
+  }
+
   postMessage(id: TaskId, input: { author: string; text: string }): Promise<{ task: TaskRecord; url: string | null }> {
     return this.call("POST", `/v1/tasks/${id}/messages`, z.object({ task: TaskRecord, url: z.string().nullable() }), input);
   }
