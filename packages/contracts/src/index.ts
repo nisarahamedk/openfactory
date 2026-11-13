@@ -198,6 +198,8 @@ export interface CodeForge {
   findPullRequestForBranch(repo: RepoRef, branch: string): Promise<{ number: number; url: string; headSha: string } | null>;
   /** Short-lived token the sandbox may use to push to one repo. */
   mintPushToken(repo: RepoRef): Promise<{ token: string; expiresAt: string }>;
+  /** Size of a PR at its current head (optional; used for cost-per-PR-by-size). */
+  pullRequestStats?(repo: RepoRef, number: number): Promise<{ headSha: string; additions: number; deletions: number; changedFiles: number }>;
 }
 
 export const TurnResult = z.object({
@@ -372,6 +374,7 @@ export type Abstractions = {
   metrics: MetricsSink;
   modelGateway: ModelGateway;
   secrets: Secrets;
+  evidence: EvidenceStore;
 };
 export type AbstractionKey = keyof Abstractions;
 export const ABSTRACTION_KEYS = [
@@ -384,6 +387,7 @@ export const ABSTRACTION_KEYS = [
   "metrics",
   "modelGateway",
   "secrets",
+  "evidence",
 ] as const satisfies readonly AbstractionKey[];
 
 export interface ProviderContext {
