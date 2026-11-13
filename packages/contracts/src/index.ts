@@ -380,3 +380,44 @@ export const ReplayResult = z.object({
   notes: z.string(),
 });
 export type ReplayResult = z.infer<typeof ReplayResult>;
+
+// ───────────────────────────── evidence ─────────────────────────────
+
+/** A stored evidence file as read back from an EvidenceStore. */
+export type StoredEvidence = { bytes: Uint8Array; contentType: string };
+
+/**
+ * Where evidence files (screenshots, videos, logs, transcripts) are kept and served from.
+ * Keys are `<taskId>/<name>`; names are `[A-Za-z0-9._-]{1,200}`. Providers: disk, any S3-API store.
+ */
+export interface EvidenceStore {
+  readonly name: string;
+  /** Store bytes under `<taskId>/<name>`, replacing any earlier file of that name. */
+  put(taskId: string, name: string, bytes: Uint8Array, contentType: string): Promise<{ key: string; url: string }>;
+  /** Read a stored file back, or null if there is none. Invalid keys read as null. */
+  get(key: string): Promise<StoredEvidence | null>;
+  /** The URL a reviewer opens for this key (does not check that it exists). */
+  url(key: string): string;
+}
+
+const EVIDENCE_NAME = /^[A-Za-z0-9._-]{1,200}$/;
+
+/** Build and validate an evidence key; throws on names that could escape the task's folder. */
+export function evidenceKey(taskId: string, name: string): string {
+  if (!EVIDENCE_NAME.test(taskId) || !EVIDENCE_NAME.test(name) || name === "." || name === ".." || taskId === "." || taskId === "..")
+    throw new Error(`invalid evidence name: ${taskId}/${name}`);
+  return `${taskId}/${name}`;
+}
+
+/** Split and validate a key; null when it isn't a valid `<taskId>/<name>`. */
+export function parseEvidenceKey(key: string): { taskId: string; name: string } | null {
+  const parts = key.split("/");
+  if (parts.length !== 2) return null;
+  const [taskId = "", name = ""] = parts;
+  try {
+    evidenceKey(taskId, name);
+    return { taskId, name };
+  } catch {
+    return null;
+  }
+}
