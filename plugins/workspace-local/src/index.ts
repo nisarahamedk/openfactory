@@ -164,3 +164,25 @@ function hostEnv(home: string): Record<string, string> {
   }
   return env;
 }
+
+type Env = Record<string, string | undefined>;
+
+/**
+ * Builds the local workspace from settings: WORKSPACE_ROOT (folder for task
+ * checkouts) and WORKSPACE_GIT_TOKEN (optional, to clone private GitHub repos).
+ */
+export function fromEnv(env: Env): LocalWorkspace {
+  const root = env.WORKSPACE_ROOT;
+  if (root === undefined || root === "") throw new Error("workspace-local needs WORKSPACE_ROOT");
+  const token = env.WORKSPACE_GIT_TOKEN;
+  return new LocalWorkspace({
+    root,
+    cloneUrl: (repo) =>
+      token === undefined || token === ""
+        ? `https://github.com/${repo.owner}/${repo.name}.git`
+        : `https://x-access-token:${token}@github.com/${repo.owner}/${repo.name}.git`,
+    baseEnv: {},
+  });
+}
+
+export const createLocalWorkspace = (options: LocalWorkspaceOptions): LocalWorkspace => new LocalWorkspace(options);

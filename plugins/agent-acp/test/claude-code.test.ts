@@ -60,7 +60,7 @@ test("a resumed session keeps the conversation", { timeout: 180_000 }, async () 
     model: "claude-sonnet-5-5",
     modelProxyUrl: mock.url,
     modelProxyKey: "mock-key",
-    configDir: join(root, "ws", "task_1", ".claude"),
+    configDir: null,
     command: [adapterBin],
     log: (l) => logs.push(l),
   });
