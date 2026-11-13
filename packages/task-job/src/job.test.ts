@@ -115,6 +115,10 @@ function world() {
       return p && p.number ? p : null;
     },
     mintPushToken: async () => ({ token: "t", expiresAt: "" }),
+    async pullRequestStats(_r, n) {
+      const p = [...prs.values()].find((x) => x.number === n)!;
+      return { headSha: p.headSha, additions: 10, deletions: 2, changedFiles: 3 };
+    },
   };
   const chat: Chat = {
     name: "fake-chat",
@@ -125,7 +129,7 @@ function world() {
   };
   const sunk: TaskRecord[] = [];
   const sink: MetricsSink = { name: "fake-dx", writeTasks: async (r) => void sunk.push(...r) };
-  return { workspace, environment, agent, codeForge, chat, sink, posts, sessions, prompts, life, sunk, files, envs };
+  return { workspace, environment, agent, codeForge, chat, sink, posts, sessions, prompts, life, sunk, files, envs, prs };
 }
 
 describe("task job", () => {
@@ -202,6 +206,9 @@ describe("task job", () => {
     // Our own bot's comment is ignored.
     expect((await jobs.handle({ ...base, id: "d4", type: "pr_review_comment", prNumber: 41, body: "x", path: null, actor: { login: "factory-bot", isBot: true } })).kind).toBe("ignore");
 
+    // A person pushes to the PR branch before merging: recorded as not by the factory.
+    for (const p of w.prs.values()) p.headSha = "human1";
+
     await jobs.handle({ ...base, id: "d5", type: "pr_merged", prNumber: 41, mergeSha: "m1" });
     await jobs.idle(taskId);
     r = (await ledger.getTask(taskId))!;
@@ -211,6 +218,12 @@ describe("task job", () => {
     expect(r.scores.some((s) => s.scorer.includes("merged"))).toBe(true);
     expect(w.sunk.at(-1)?.status).toBe("merged");
     expect(w.life).toContain("ws.destroy");
+    const ev = await ledger.events(taskId);
+    expect(ev.filter((e) => e.type === "transcript_saved").map((e) => (e.data as { key: string }).key)).toEqual(["transcript-1.jsonl", "transcript-2.jsonl"]);
+    const pushes = ev.filter((e) => e.type === "pushed").map((e) => e.data as { sha: string; byFactory?: boolean });
+    expect(pushes.at(-1)).toEqual({ sha: "human1", byFactory: false });
+    expect(pushes.filter((x) => x.byFactory === true).length).toBeGreaterThan(0);
+    expect(ev.filter((e) => e.type === "pr_stats").map((e) => (e.data as { headSha: string }).headSha)).toContain("human1");
     await jobs.close();
   }, 30_000);
 });

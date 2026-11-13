@@ -9,10 +9,10 @@ import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-work
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
 import { GitHubClient, parseWebhook } from "@openfactory/github";
 import type { AgentHarness, CodeForge, MetricsSink, Signal, TaskId } from "@openfactory/contracts";
-import { FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
+import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
-import { TaskJobs } from "@openfactory/task-job";
+import { promptTemplates, TaskJobs } from "@openfactory/task-job";
 import { fileEvidenceStore, createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { loadSelections, ProviderRegistry } from "./registry.js";
@@ -107,6 +107,13 @@ async function main() {
     return next;
   };
 
+  // Cancels share the signal queue, so a cancel never races a signal for the same task.
+  const onCancel = (id: TaskId, by: string, reason?: string) => {
+    const next = chain.then(() => jobs.cancel(id, by, reason));
+    chain = next.catch((e) => log("cancel failed", { id, error: String(e) }));
+    return next;
+  };
+
   /** A harness for another model (benchmark arms), built on first use from the same plugin. */
   const agentFor = (model: string): AgentHarness => {
     let loaded: Promise<AgentHarness> | null = null;
@@ -136,8 +143,23 @@ async function main() {
       })
     : null;
 
+  /** Option names that may hold a secret are never shown, even though factory.yaml should only hold env var names. */
+  const SECRETISH = /token|secret|password|passwd|credential|apikey|api_key|(^|[^a-z])key$/i;
+  const redact = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, SECRETISH.test(k) ? "[redacted]" : v]));
+  const factoryInfo = async () => ({
+    version: cfg.FACTORY_VERSION,
+    providersFrom: source,
+    providers: Object.fromEntries(Object.entries(selections).map(([k, s]) => [k, { name: s!.name, options: redact(s!.options) }])),
+    agent: { name: agent.name, model: agent.model },
+    foreman: { model: cfg.FOREMAN_MODEL },
+    rules: { label: cfg.FACTORY_LABEL, maxTaskUsd: cfg.MAX_TASK_USD, maxReviewRounds: cfg.MAX_REVIEW_ROUNDS, maxNudges: cfg.MAX_NUDGES },
+    prompts: { ...promptTemplates(cfg.BASE_BRANCH), foreman: FOREMAN_INSTRUCTIONS },
+  });
+
   const app = createApp({
     ledger,
+    factory: factoryInfo,
+    cancel: (id, by, reason) => onCancel(id, by, reason),
     onSignal,
     evidence,
     apiToken: cfg.FACTORY_API_TOKEN,

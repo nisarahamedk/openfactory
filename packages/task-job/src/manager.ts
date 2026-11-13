@@ -13,6 +13,7 @@ import type { Signal, TaskId, TaskRecord } from "@openfactory/contracts";
 import { askForeman, FOREMAN_INSTRUCTIONS } from "@openfactory/foreman";
 import { decide, isTerminal, type Action } from "@openfactory/rules";
 import { issueTarget, type JobDeps } from "./deps.js";
+import { scoreAndExport, sleepAll } from "./steps.js";
 import { jobTasks, type JobTasks } from "./tasks.js";
 
 export type TaskJobsOptions = {
@@ -194,6 +195,26 @@ export class TaskJobs {
         return { ...action, taskId: task.id };
       }
     }
+  }
+
+  /**
+   * Stop a task from the API: abort its running job, put its environment to sleep, and mark it failed
+   * (stage "cancelled"), so a later comment can still resume it. Returns null when the task is unknown.
+   */
+  async cancel(taskId: TaskId, by: string, reason?: string): Promise<TaskRecord | null> {
+    const l = this.deps.ledger;
+    const task = await l.getTask(taskId);
+    if (!task) return null;
+    if (isTerminal(task.status)) return task;
+    const { h } = await this.harness(taskId);
+    for (const id of await this.liveJobTasks(taskId)) await h.abortTask(id, ctx).catch(() => {});
+    await l.append(taskId, "cancelled", reason ? { by, reason } : { by });
+    const record = await l.setStatus(taskId, "failed", "cancelled");
+    await sleepAll(this.deps, taskId);
+    await scoreAndExport(this.deps, taskId);
+    const target = record.pr ? { repo: record.source.repo, issueOrPr: record.pr.number } : issueTarget(record);
+    if (target) await this.deps.chat.post(target, `Stopped by ${by}${reason ? `: ${reason}` : "."} Comment again to resume.`).catch(() => {});
+    return (await l.getTask(taskId)) ?? record;
   }
 
   /** Have the foreman post in the issue. Failures are logged; the foreman never blocks the job. */

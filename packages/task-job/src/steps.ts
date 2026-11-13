@@ -8,6 +8,7 @@ import { mergeScores, runScorers } from "@openfactory/scoring";
 import { z } from "zod";
 import { branchFor, issueTarget, type JobDeps } from "./deps.js";
 import { systemPrompt } from "./prompts.js";
+import { TranscriptRecorder } from "./transcript.js";
 
 export async function mustTask(deps: JobDeps, taskId: TaskId): Promise<TaskRecord> {
   const r = await deps.ledger.getTask(taskId);
@@ -79,6 +80,48 @@ export async function sleepAll(deps: JobDeps, taskId: TaskId): Promise<void> {
   }
 }
 
+/**
+ * Record a PR head nobody in the factory pushed (a person pushed between turns).
+ * Called before every turn and at finalize, so the next factory push is not blamed on a person.
+ */
+export async function notePushesByOthers(deps: JobDeps, taskId: TaskId): Promise<void> {
+  const record = await mustTask(deps, taskId);
+  if (!record.pr || !record.branch) return;
+  try {
+    const pr = await deps.codeForge.findPullRequestForBranch(record.source.repo, record.branch);
+    if (pr?.headSha && pr.headSha !== record.pr.headSha) {
+      await deps.ledger.append(taskId, "pushed", { sha: pr.headSha, byFactory: false }, { dedupeKey: `pushed:${taskId}:${pr.headSha}` });
+      await recordPrStats(deps, taskId);
+    }
+  } catch (e) {
+    deps.log("push check failed", { taskId, error: String(e) });
+  }
+}
+
+/** PR size at its current head, once per head. Never throws. */
+export async function recordPrStats(deps: JobDeps, taskId: TaskId): Promise<void> {
+  if (!deps.codeForge.pullRequestStats) return;
+  try {
+    const record = await mustTask(deps, taskId);
+    if (!record.pr) return;
+    const st = await deps.codeForge.pullRequestStats(record.source.repo, record.pr.number);
+    await deps.ledger.append(taskId, "pr_stats", st, { dedupeKey: `pr_stats:${taskId}:${st.headSha}` });
+  } catch (e) {
+    deps.log("pr stats failed", { taskId, error: String(e) });
+  }
+}
+
+/** Save one turn's transcript to the EvidenceStore and point to it from the ledger. Never throws. */
+async function saveTranscript(deps: JobDeps, taskId: TaskId, turn: number, t: TranscriptRecorder): Promise<void> {
+  try {
+    const key = `transcript-${turn}.jsonl`;
+    const { url } = await deps.evidence.put(taskId, key, Buffer.from(t.toJsonl(), "utf8"), "application/x-ndjson");
+    await deps.ledger.append(taskId, "transcript_saved", { turn, key, url, lines: t.size }, { dedupeKey: `transcript:${taskId}:${turn}` });
+  } catch (e) {
+    deps.log("transcript save failed", { taskId, turn, error: String(e) });
+  }
+}
+
 /** One agent turn on the task's single harness session (resumed across review rounds). */
 export async function runTurn(
   deps: JobDeps,
@@ -87,6 +130,7 @@ export async function runTurn(
   prompt: string,
   signal: AbortSignal,
 ): Promise<string> {
+  await notePushesByOthers(deps, taskId);
   const record = await mustTask(deps, taskId);
   const { ws, env } = await attach(deps, record);
   const skill = await env.skill();
@@ -104,13 +148,18 @@ export async function runTurn(
   });
   if (session.sessionId !== record.harnessSessionId)
     await deps.ledger.append(taskId, "session_started", { sessionId: session.sessionId });
+  const turn = (await deps.ledger.events(taskId)).filter((e) => e.type === "turn_started").length + 1;
   await deps.ledger.append(taskId, "turn_started", { reason });
+  const transcript = new TranscriptRecorder();
+  transcript.prompt(prompt);
   const onAbort = () => void session.cancel().catch(() => {});
   signal.addEventListener("abort", onAbort, { once: true });
   try {
     const result = await session.prompt(prompt, (u) => {
+      transcript.update(u);
       if (u.kind === "tool_call" && (u.status === "completed" || u.status === "failed")) deps.log("tool", { taskId, title: u.title, status: u.status });
     });
+    transcript.result(result.stopReason, result.usage);
     await deps.ledger.append(taskId, "turn_finished", {
       reason,
       usage: result.usage,
@@ -118,8 +167,12 @@ export async function runTurn(
       summary: result.summary.slice(0, 4000),
     });
     return result.summary;
+  } catch (e) {
+    transcript.error(e instanceof Error ? e.message : String(e));
+    throw e;
   } finally {
     signal.removeEventListener("abort", onAbort);
+    await saveTranscript(deps, taskId, turn, transcript);
     await session.close().catch((e) => deps.log("session close failed", { taskId, error: String(e) }));
   }
 }
@@ -147,9 +200,15 @@ export async function ensurePr(deps: JobDeps, taskId: TaskId, summary: string): 
     }
   }
   if (!pr) return record;
-  if (!record.pr || record.pr.number !== pr.number)
+  let moved = false;
+  if (!record.pr || record.pr.number !== pr.number) {
     record = (await deps.ledger.append(taskId, "pr_opened", { number: pr.number, url: pr.url, headSha: pr.headSha || null })).record;
-  else if (pr.headSha && pr.headSha !== record.pr.headSha) record = (await deps.ledger.append(taskId, "pushed", { sha: pr.headSha })).record;
+    moved = true;
+  } else if (pr.headSha && pr.headSha !== record.pr.headSha) {
+    record = (await deps.ledger.append(taskId, "pushed", { sha: pr.headSha, byFactory: true }, { dedupeKey: `pushed:${taskId}:${pr.headSha}` })).record;
+    moved = true;
+  }
+  if (moved) await recordPrStats(deps, taskId);
   return record;
 }
 
