@@ -44,7 +44,7 @@ Status: **Decided** by Nisar on 2026-11-13. Migration steps 1 and 3 are done (re
 | Telemetry | traces, metrics and logs out | **OpenTelemetry** (GenAI conventions) | any OTLP backend: Datadog, Grafana, Honeycomb, Langfuse | `telemetry-otlp` (task, phases, turns; tool-call and model-call spans not yet), enabled by `OTEL_EXPORTER_OTLP_ENDPOINT` |
 | Scorer | grade one task record | (none) | facts, LLM judge, world checks | `Scorer` |
 | Metrics | rows to org dashboards | CDEvents (check adoption first) | DX, DevLake | `MetricsSink` |
-| OutcomeSource | outcomes after the merge | webhooks | Rootly, PagerDuty, Datadog monitors, reverts | half (fake DX incidents) |
+| OutcomeSource | outcomes after the merge | polled (`poll(mergedTasks)`), webhooks later | Rootly, PagerDuty, Datadog monitors, reverts | `github` (reverts, follow-up fixes), `dxfake` (incidents, deploys); polled every 10 min for 30 days |
 | Benchmark | capture and replay tasks | **Harbor** task format | Harbor folders | `packages/bench`, not swappable |
 | Rollout | canary and 10% routing of factory versions | OpenFeature (check adoption first) | any flag service, built-in random | missing |
 | Identity | the same person across tools; who may start a task | **OIDC/SAML**, **SCIM** | Okta, Entra, Google | missing |

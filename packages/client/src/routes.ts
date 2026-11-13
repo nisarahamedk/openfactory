@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BenchmarkTask, LedgerEvent, Signal, TaskRecord, TaskStatus } from "@openfactory/contracts";
+import { BenchmarkTask, LedgerEvent, RolloutState, SavedView, Signal, TaskRecord, TaskStatus, Team, ViewShare } from "@openfactory/contracts";
 import { ArmSpec, BenchRun } from "@openfactory/bench";
 
 /** Error body every /v1 route returns on failure. */
@@ -50,6 +50,47 @@ export const StartBenchRun = z
     maxCostUsd: z.number().positive().meta({ description: "Budget for the run; the server caps it further", example: 5 }),
   })
   .meta({ id: "StartBenchRun" });
+
+/** One factory: the org default or a team factory, with what it changes on top of the default. */
+export const FactoryView = z
+  .object({
+    slug: z.string(),
+    extends: z.string().nullable(),
+    description: z.string().nullable(),
+    scorers: z.array(z.string()),
+    benchmarks: z.array(z.string()),
+    world: z.string().nullable().meta({ description: "OpenWorld world for the 30-day check" }),
+    mergeRisk: z.record(z.string(), z.unknown()).nullable(),
+    teams: z.array(z.string()),
+  })
+  .meta({ description: "A factory: the org default or a team factory" });
+export type FactoryView = z.infer<typeof FactoryView>;
+
+/** Body of POST /v1/views. */
+export const SaveView = z
+  .object({
+    id: z.string().optional().meta({ description: "Update this view (owner only); omit to create" }),
+    name: z.string().min(1).max(120),
+    path: z.string().startsWith("/").max(2000).meta({ example: "/insights?scope=team:core&measure=came_back&by=kind" }),
+    owner: z.string().min(1).max(100),
+    share: ViewShare,
+    team: z.string().nullable().default(null),
+  })
+  .meta({ id: "SaveView" });
+
+/** Body of POST /v1/rollout/{factory}. */
+export const SetRollout = z
+  .object({
+    live: z.string().nullable(),
+    candidate: z.string().nullable(),
+    share: z.number().min(0).max(1),
+    by: z.string().min(1).max(100),
+    note: z.string().max(500).nullable().default(null),
+  })
+  .meta({ id: "SetRollout" });
+
+/** Body of POST /v1/tasks/{id}/messages. */
+export const PostMessage = z.object({ author: z.string().min(1).max(100), text: z.string().min(1).max(10_000) }).meta({ id: "PostMessage" });
 
 type Method = "get" | "post";
 
@@ -164,6 +205,74 @@ export const V1_ROUTES: RouteSpec[] = [
     operationId: "getBenchRun",
     summary: "One run with its results and report",
     responses: { 200: { description: "The run", schema: z.object({ run: BenchRun }) }, ...notFound },
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/messages",
+    operationId: "postTaskMessage",
+    summary: "Write to the task as a person: posted where the task lives (PR or issue) and handed to its agent like a comment",
+    body: PostMessage,
+    responses: { 200: { description: "Posted", schema: z.object({ task: TaskRecord, url: z.string().nullable() }) }, ...bad, ...notFound },
+  },
+  {
+    method: "get",
+    path: "/teams",
+    operationId: "listTeams",
+    summary: "Teams and their people and repos, from the org's directory (GitHub teams, SSO groups or factory.yaml)",
+    responses: { 200: { description: "Teams", schema: z.object({ teams: z.array(Team) }) } },
+  },
+  {
+    method: "get",
+    path: "/factories",
+    operationId: "listFactories",
+    summary: "The org default factory and every team factory built on it, with each one's rollout",
+    responses: { 200: { description: "Factories", schema: z.object({ factories: z.array(FactoryView), rollouts: z.array(RolloutState) }) } },
+  },
+  {
+    method: "get",
+    path: "/rollout/:factory",
+    operationId: "getRollout",
+    summary: "A factory's live version, candidate and the candidate's share of new tasks, with history",
+    responses: { 200: { description: "Rollout", schema: z.object({ rollout: RolloutState.nullable(), history: z.array(RolloutState) }) }, ...notFound },
+  },
+  {
+    method: "post",
+    path: "/rollout/:factory",
+    operationId: "setRollout",
+    summary: "Change which version new tasks run on: send a share to a candidate, promote, or roll back",
+    body: SetRollout,
+    responses: { 200: { description: "New rollout", schema: z.object({ rollout: RolloutState }) }, ...bad, ...notFound },
+  },
+  {
+    method: "get",
+    path: "/views",
+    operationId: "listViews",
+    summary: "Saved views a person may see: their own, their teams' and the org's",
+    query: z.object({ viewer: z.string().meta({ example: "dana" }) }),
+    responses: { 200: { description: "Views", schema: z.object({ views: z.array(SavedView) }) }, ...bad },
+  },
+  {
+    method: "get",
+    path: "/views/:id",
+    operationId: "getView",
+    summary: "One saved view (anyone with the id may open it)",
+    responses: { 200: { description: "The view", schema: z.object({ view: SavedView }) }, ...notFound },
+  },
+  {
+    method: "post",
+    path: "/views",
+    operationId: "saveView",
+    summary: "Save a view: a name plus the app path holding its scope, filters, measure and grouping",
+    body: SaveView,
+    responses: { 200: { description: "Saved", schema: z.object({ view: SavedView }) }, ...bad },
+  },
+  {
+    method: "post",
+    path: "/views/:id/delete",
+    operationId: "deleteView",
+    summary: "Delete a saved view (its owner only)",
+    body: z.object({ by: z.string() }),
+    responses: { 200: { description: "Deleted", schema: z.object({ deleted: z.boolean() }) }, ...bad },
   },
   {
     method: "get",

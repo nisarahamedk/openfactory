@@ -89,4 +89,24 @@ describe("fake DX", () => {
     expect(outs.map((o) => o.kind)).toEqual(["incident_linked"]);
     expect(await src.outcomesFor(rec("task_a", { outcomes: outs }), "2026-11-15T00:00:00Z")).toEqual([]);
   });
+
+  it("attributes incidents and deploys to a task by its merge sha", async () => {
+    const { cfg, call } = setup();
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const merged = { kind: "merged" as const, source: "github", detail: `merge ${sha}`, at: "2026-11-13T10:00:00Z", arrivedAt: "2026-11-13T10:00:00Z" };
+    await call("/api/incidents.upsert", {
+      id: "inc_9", title: "latency", severity: "sev2", startedAt: "2026-11-14T00:00:00Z", resolvedAt: null, linkedPrs: [], commitShas: [sha.slice(0, 7)],
+    });
+    for (const [id, env, at, success] of [["d1", "staging", "2026-11-13T11:00:00Z", true], ["d2", "production", "2026-11-13T12:00:00Z", false], ["d3", "production", "2026-11-13T13:00:00Z", true], ["d4", "production", "2026-11-13T14:00:00Z", true]] as const) {
+      await call("/api/deployments.create", { id, service: "web", environment: env, commitSha: sha, repo: "acme/app", deployedAt: at, success });
+    }
+    await call("/api/deployments.create", { id: "d5", service: "web", environment: "production", commitSha: "fff0000", repo: "acme/app", deployedAt: "2026-11-13T15:00:00Z", success: true });
+    const src = new DxFakeOutcomeSource(cfg);
+    const found = await src.poll([{ record: rec("task_a", { outcomes: [merged] }), mergeSha: sha, mergedAt: merged.at }], "2026-11-15T00:00:00Z");
+    expect(found.map((f) => [f.ref, f.outcome.kind, f.outcome.at])).toEqual([
+      ["incident:inc_9", "incident_linked", "2026-11-14T00:00:00Z"],
+      ["deploy:staging", "deployed", "2026-11-13T11:00:00Z"],
+      ["deploy:production", "deployed", "2026-11-13T13:00:00Z"],
+    ]);
+  });
 });

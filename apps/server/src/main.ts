@@ -8,21 +8,22 @@ import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
 import { GitHubClient, parseWebhook } from "@openfactory/github";
-import type { AgentHarness, CodeForge, MetricsSink, Signal, TaskId } from "@openfactory/contracts";
+import type { AgentHarness, CodeForge, Directory, MetricsSink, OutcomeSource, Signal, Team, TaskId } from "@openfactory/contracts";
 import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
-import { promptTemplates, TaskJobs } from "@openfactory/task-job";
+import { promptTemplates, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps } from "@openfactory/task-job";
 import { fileEvidenceStore, createApp } from "./app.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
-import { loadFactoryExtras, loadModelRouting, loadSelections, ProviderRegistry } from "./registry.js";
+import { cachedDirectory, configDirectory, factoryViews, loadOrgConfig } from "./org.js";
+import { loadFactoryExtras, loadModelRouting, loadOutcomeConfig, loadSelections, ProviderRegistry } from "./registry.js";
 
 const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), msg, ...fields }));
 
 async function main() {
   const cfg = loadConfig(process.env);
-  const { ledger, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
+  const { ledger, app: store, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
 
   const gh = new GitHubClient({ token: () => cfg.GITHUB_TOKEN });
   const tokenLogin = await gh.whoami().catch(() => null);
@@ -76,8 +77,7 @@ async function main() {
   if (otlp) sinks.push(otlp);
   const evidence = fileEvidenceStore(join(cfg.DATA_DIR, "evidence"), cfg.PUBLIC_URL);
 
-  const jobs = new TaskJobs(
-    {
+  const jobDeps: JobDeps = {
       ledger,
       rules: { label: cfg.FACTORY_LABEL, botLogins, maxTaskUsd: cfg.MAX_TASK_USD, maxReviewRounds: cfg.MAX_REVIEW_ROUNDS },
       chat,
@@ -97,7 +97,9 @@ async function main() {
       sinks,
       config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/", risk: extras.risk, versionPrompts: extras.versionPrompts },
       log,
-    },
+  };
+  const jobs = new TaskJobs(
+    jobDeps,
     {
       dataDir: cfg.DATA_DIR,
       models,
@@ -105,12 +107,36 @@ async function main() {
       factoryVersion: () => cfg.FACTORY_VERSION,
       harnessInfo: { name: agent.name, model: agent.model },
       modelRouting,
-      rollout: extras.rollout,
+      // The app's rollout (Factories > Versions) overrides factory.yaml's, read per new task.
+      rollout: async () => {
+        const r = await store.rollout("default").catch(() => null);
+        if (!r) return extras.rollout;
+        return { stable: r.state.live ?? cfg.FACTORY_VERSION, candidate: r.state.candidate, share: r.state.share };
+      },
       versionModels: extras.versionModels,
       knownRepos: cfg.repos,
     },
   );
   log("resumed tasks", { count: await jobs.resumeAll() });
+
+  // Late outcomes: reverts, follow-up fixes, incidents and deploys for tasks merged in the last windowDays.
+  const outcomeCfg = loadOutcomeConfig(pluginEnv, cfg.FACTORY_FILE);
+  const outcomeSources: OutcomeSource[] = [];
+  for (const sel of outcomeCfg?.sources ?? []) {
+    try {
+      outcomeSources.push(await registry.build("outcomes", sel));
+      log("outcome source", { provider: sel.name });
+    } catch (e) {
+      log("outcome source unavailable", { provider: sel.name, error: String(e) });
+    }
+  }
+  const outcomeWatch =
+    outcomeCfg && outcomeSources.length > 0
+      ? watchOutcomes(
+          { ledger, sources: outcomeSources, rescore: (id) => scoreAndExport(jobDeps, id), log },
+          { windowDays: outcomeCfg.windowDays, intervalMs: outcomeCfg.intervalMs },
+        )
+      : null;
 
   // One signal at a time: the job only records and schedules, so this stays quick.
   let chain: Promise<unknown> = Promise.resolve();
@@ -172,8 +198,46 @@ async function main() {
     prompts: { ...promptTemplates(cfg.BASE_BRANCH), foreman: FOREMAN_INSTRUCTIONS },
   });
 
+  // Teams: factory.yaml `teams:` (a list, or a directory provider such as GitHub org teams). Without either,
+  // one team holds the factory's repos and everyone who has asked for a task.
+  const org = loadOrgConfig(cfg.FACTORY_FILE);
+  let directory: Directory;
+  if (org.teams) directory = configDirectory(org.teams);
+  else if (org.directory) directory = cachedDirectory(await registry.build("directory", org.directory));
+  else
+    directory = cachedDirectory(
+      {
+        name: "inferred",
+        teams: async (): Promise<Team[]> => {
+          const tasks = await ledger.listTasks({ limit: 1000 });
+          const people = [...new Set(tasks.map((t) => t.requestedBy).filter((x): x is string => typeof x === "string" && !botLogins.includes(x)))].sort();
+          return [{ slug: "everyone", name: "Everyone", source: "inferred", members: people.map((login) => ({ login, name: null, role: "member" as const })), repos: cfg.repos.map((r) => `${r.owner}/${r.name}`), factory: "default" }];
+        },
+      },
+      60_000,
+    );
+  log("teams from", { directory: directory.name });
+
+  /** A person writes to a task from the app: post it where the task lives, record it, and hand it to the job as a comment. */
+  const message = async (id: TaskId, author: string, text: string) => {
+    const t = await ledger.getTask(id);
+    if (!t) return null;
+    const target = t.pr?.number ?? t.source.issueNumber;
+    let url: string | null = null;
+    if (target !== null) url = (await chat.post({ repo: t.source.repo, issueOrPr: target }, `**@${author}** wrote in the factory app:\n\n${text}`)).url;
+    const at = new Date().toISOString();
+    const mid = `app:${id}:${Date.now().toString(36)}`;
+    await ledger.append(id, "message_received", { author, text, url }, { dedupeKey: `msg:${mid}` });
+    if (target !== null) await onSignal({ type: "issue_comment", id: mid, repo: t.source.repo, at, actor: { login: author, isBot: false }, issueNumber: target, body: text });
+    return { task: (await ledger.getTask(id))!, url };
+  };
+
   const app = createApp({
     ledger,
+    store,
+    teams: () => directory.teams(),
+    factories: async () => factoryViews(org.factories, await directory.teams()),
+    message,
     factory: factoryInfo,
     cancel: (id, by, reason) => onCancel(id, by, reason),
     onSignal,
@@ -195,6 +259,7 @@ async function main() {
   const shutdown = async () => {
     log("shutting down");
     await poller?.stop();
+    await outcomeWatch?.stop();
     server.close();
     await jobs.close();
     await closeDb();

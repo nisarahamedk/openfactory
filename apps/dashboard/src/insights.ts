@@ -283,6 +283,42 @@ export function insights(all: readonly TaskFacts[], now: string, days: number): 
   };
 }
 
+/** One row per day of the window, for the dashboard's charts. */
+export interface DayRow {
+  day: string;
+  started: number;
+  opened: number;
+  merged: number;
+  /** Model spend of tasks started that day. */
+  costUsd: number;
+  /** Mean model cost of PRs opened that day; null on days with none. */
+  costPerPr: number | null;
+}
+
+export function dailySeries(all: readonly TaskFacts[], now: string, days: number): DayRow[] {
+  const end = Date.parse(now);
+  const rows = new Map<string, DayRow & { prCost: number }>();
+  for (let i = days - 1; i >= 0; i--) {
+    const day = new Date(end - i * 86_400_000).toISOString().slice(0, 10);
+    rows.set(day, { day, started: 0, opened: 0, merged: 0, costUsd: 0, costPerPr: null, prCost: 0 });
+  }
+  for (const f of all) {
+    const s = rows.get(f.task.createdAt.slice(0, 10));
+    if (s) {
+      s.started++;
+      s.costUsd += f.task.usage.costUsd;
+    }
+    const o = f.prOpenedAt ? rows.get(f.prOpenedAt.slice(0, 10)) : undefined;
+    if (o) {
+      o.opened++;
+      o.prCost += f.task.usage.costUsd;
+    }
+    const m = f.mergedAt ? rows.get(f.mergedAt.slice(0, 10)) : undefined;
+    if (m) m.merged++;
+  }
+  return [...rows.values()].map(({ prCost, ...r }) => ({ ...r, costPerPr: r.opened === 0 ? null : prCost / r.opened }));
+}
+
 function daily(facts: readonly TaskFacts[], now: string, days: number): Array<{ day: string; opened: number; merged: number }> {
   const out = new Map<string, { opened: number; merged: number }>();
   const end = new Date(now);

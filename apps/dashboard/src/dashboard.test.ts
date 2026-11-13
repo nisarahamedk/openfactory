@@ -125,11 +125,14 @@ describe("dashboard", () => {
       t("task_w", { status: "working", title: "Busy", pr: null }),
     ]);
     const app = createDashboard(api, { password: null, models: ["a", "b"], now: () => "2026-11-13T12:00:00Z" });
-    const home = await (await app.request("/")).text();
-    expect(home).toContain("PR review");
+    const home = await (await app.request("/activity")).text();
+    expect(home).toContain("Review the PR");
     expect(home).toContain("PR #7 is waiting for review.");
-    expect(home).toContain("Running now (1)");
+    expect(home).toMatch(/Working<span class="n">1</);
     expect(home).toContain('http-equiv="refresh"');
+    const needs = await (await app.request("/activity?stage=needs_you")).text();
+    expect(needs).toContain("Showing 1 result");
+    expect(needs).not.toContain("Busy");
     const open = await (await app.request("/runs?status=open")).text();
     expect(open).toContain("Busy");
     expect(open).not.toContain("task_a</div>");
@@ -148,12 +151,14 @@ describe("dashboard", () => {
       ],
     });
     const app = createDashboard(api, { password: null, models: ["a", "b"], now: () => "2026-11-13T12:00:00Z" });
-    const html = await (await app.request("/metrics?days=7")).text();
-    expect(html).toContain("autonomy: merged with no human commit");
+    expect((await app.request("/metrics?days=7")).headers.get("location")).toBe("/?days=7");
+    const html = await (await app.request("/?days=7")).text();
+    expect(html).toContain("Autonomy");
+    expect(html).toContain("1 of 1 merged PRs had no human commit");
     expect(html).toContain("1h 0m"); // kickoff → PR
     expect(html).toContain("2h 0m"); // PR → first review
     expect(html).toContain("+30 −5");
-    expect(html).toContain("Cost per PR by size");
+    expect(html).toContain("Cost by PR size");
     expect(html).toContain("<svg");
   });
 
@@ -184,11 +189,24 @@ describe("dashboard", () => {
     expect(cancelled).toEqual([{ id: "task_w", body: { by: "dashboard", reason: "wrong ask" } }]);
   });
 
-  it("factory page shows providers, rules and prompts", async () => {
+  it("factory pages show agents, prompts, providers and rules; the font is served", async () => {
     const { api } = fakeServer([]);
-    const html = await (await createDashboard(api, { password: null, models: ["a", "b"] }).request("/factory")).text();
-    expect(html).toContain("factory.yaml");
-    expect(html).toContain("s3");
-    expect(html).toContain("You are &lt;the&gt; agent");
+    const app = createDashboard(api, { password: null, models: ["a", "b"], factoryName: "acme" });
+    expect((await app.request("/factory")).headers.get("location")).toBe("/agents");
+    const agents = await (await app.request("/agents")).text();
+    expect(agents).toContain("implementation");
+    expect(agents).toContain("claude-code");
+    expect(agents).toContain("fv_1"); // sidebar version chip
+    expect(agents).toContain(">acme<");
+    expect(await (await app.request("/agents/implementation")).text()).toContain("You are &lt;the&gt; agent");
+    expect(await (await app.request("/agents/implementation?prompt=review")).text()).toContain(">r</pre>");
+    expect((await app.request("/agents/nope")).status).toBe(404);
+    expect(await (await app.request("/apps")).text()).toContain("s3");
+    expect(await (await app.request("/automations")).text()).toContain("factory.yaml");
+    expect((await app.request("/secrets")).status).toBe(200);
+    expect((await app.request("/environments")).status).toBe(200);
+    const font = await app.request("/assets/mona-sans.woff2");
+    expect(font.headers.get("content-type")).toBe("font/woff2");
+    expect((await font.arrayBuffer()).byteLength).toBeGreaterThan(10_000);
   });
 });

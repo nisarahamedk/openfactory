@@ -98,6 +98,47 @@ export function loadModelRouting(env: Record<string, string | undefined>, path?:
   };
 }
 
+const OutcomesFile = z.object({
+  outcomes: z
+    .object({
+      sources: z.array(SelectionInput).optional(),
+      windowDays: z.number().positive().optional(),
+      intervalMs: z.number().int().min(10_000).optional(),
+    })
+    .optional(),
+}).passthrough();
+
+export type OutcomeConfig = { sources: Selection[]; windowDays: number; intervalMs: number };
+
+const toSelection = (sel: z.infer<typeof SelectionInput>): Selection => {
+  if (typeof sel === "string") return { name: sel, options: {} };
+  const [name, options] = Object.entries(sel)[0]!;
+  return { name, options: options ?? {} };
+};
+
+/**
+ * Where late outcomes come from and how often to look. factory.yaml:
+ *
+ *   outcomes:
+ *     sources: [github, { dxfake: { url: https://dx.example } }]
+ *     windowDays: 30        # watch each merged task this long
+ *     intervalMs: 600000    # every 10 minutes
+ *
+ * Without it: github, plus dxfake when DXFAKE_URL and DXFAKE_TOKEN are set; OUTCOME_INTERVAL_MS and
+ * OUTCOME_WINDOW_DAYS override the timing. OUTCOMES=off turns the watcher off.
+ */
+export function loadOutcomeConfig(env: Record<string, string | undefined>, path?: string): OutcomeConfig | null {
+  if (env.OUTCOMES === "off") return null;
+  const file = path && existsSync(path) ? OutcomesFile.parse(parse(readFileSync(path, "utf8")) ?? {}).outcomes : undefined;
+  const defaults: Selection[] = [{ name: "github", options: {} }];
+  if (env.DXFAKE_URL && env.DXFAKE_TOKEN) defaults.push({ name: "dxfake", options: {} });
+  return {
+    sources: file?.sources ? file.sources.map(toSelection) : defaults,
+    windowDays: file?.windowDays ?? Number(env.OUTCOME_WINDOW_DAYS ?? 30),
+    intervalMs: file?.intervalMs ?? Number(env.OUTCOME_INTERVAL_MS ?? 600_000),
+  };
+}
+
 const Routing = z.object({
   default: z.string().min(1),
   routes: z.array(z.object({ model: z.string().min(1), labels: z.array(z.string()).optional(), keywords: z.array(z.string()).optional() })).default([]),

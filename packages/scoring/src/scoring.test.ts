@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LedgerEvent, Scorer, TaskRecord } from "@openfactory/contracts";
-import { ciFirstPassScorer, mergedScorer, reviewRoundsScorer, stageTimeScorer, timeInStages } from "./facts.js";
+import { ciFirstPassScorer, heldUpScorer, mergedScorer, reviewRoundsScorer, stageTimeScorer, timeInStages } from "./facts.js";
 import { latestScores, mergeScores, runScorers } from "./index.js";
 
 const T0 = "2026-11-13T10:00:00.000Z";
@@ -82,6 +82,22 @@ describe("fact scorers", () => {
   it("malformed event data is ignored instead of crashing", () => {
     const bad = [ev(25, "ci_completed", { conclusion: 3 })];
     expect(ciFirstPassScorer.score(record(), bad, at(61))).toBeNull();
+  });
+});
+
+describe("held up", () => {
+  const merged = { kind: "merged" as const, source: "github", detail: "merge abc1234", at: T0, arrivedAt: T0 };
+  const day = (d: number) => new Date(Date.parse(T0) + d * 86_400_000).toISOString();
+  it("is open inside the window, 0 when something came back, 1 after 30 quiet days", () => {
+    expect(heldUpScorer.score(record({ outcomes: [merged] }), [], day(10))).toBeNull();
+    const reverted = { kind: "reverted" as const, source: "github", detail: "reverted by PR #40", at: day(6), arrivedAt: day(6) };
+    expect(heldUpScorer.score(record({ outcomes: [merged, reverted] }), [], day(10))).toMatchObject({ value: 0, label: "reverted" });
+    expect(heldUpScorer.score(record({ outcomes: [merged] }), [], day(31))).toMatchObject({ value: 1 });
+  });
+  it("rework and late arrivals after the window don't count against it", () => {
+    const rework = { kind: "rework" as const, source: "github", detail: "reworked", at: day(3), arrivedAt: day(3) };
+    const late = { kind: "incident_linked" as const, source: "dxfake", detail: "inc", at: day(40), arrivedAt: day(40) };
+    expect(heldUpScorer.score(record({ outcomes: [merged, rework, late] }), [], day(41))).toMatchObject({ value: 1 });
   });
 });
 

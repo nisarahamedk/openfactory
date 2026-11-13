@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { MetricsSink, Outcome, TaskRecord } from "@openfactory/contracts";
+import { mergeOf, type FoundOutcome, type MergedTask, type MetricsSink, type Outcome, type OutcomeSource, type TaskRecord } from "@openfactory/contracts";
 import { latestScores } from "@openfactory/scoring";
 import { Deployment, Incident, type Cell } from "./store.js";
 
@@ -92,11 +92,12 @@ export class DxFakeSink implements MetricsSink {
 }
 
 /**
- * Reads deployments and incidents back out of the fake DX and turns them into late
- * outcomes for a task: an incident whose linked PRs include the task's PR becomes
- * `incident_linked`. (Deployments are returned for lead-time-to-deploy; not an outcome.)
+ * Reads deployments and incidents back out of the fake DX and attributes them to merged tasks:
+ * - an incident linked to the task's PR, or to its merge sha, becomes `incident_linked`;
+ * - a successful deploy of the merge sha becomes `deployed` (one per environment), so the timeline
+ *   shows when the change reached people, and lead time to deploy can be scored.
  */
-export class DxFakeOutcomeSource {
+export class DxFakeOutcomeSource implements OutcomeSource {
   readonly name = "dxfake";
   private readonly client: DxClient;
 
@@ -114,20 +115,45 @@ export class DxFakeOutcomeSource {
     return r.incidents;
   }
 
-  /** Outcomes not already on the record (deduplicated by kind + detail). */
+  async poll(merged: MergedTask[], now: string): Promise<FoundOutcome[]> {
+    const withPr = merged.filter((t) => t.record.pr !== null);
+    if (withPr.length === 0) return [];
+    const [incidents, deployments] = await Promise.all([this.incidents(), this.deployments()]);
+    const out: FoundOutcome[] = [];
+    for (const t of withPr) {
+      const repo = `${t.record.source.repo.owner}/${t.record.source.repo.name}`;
+      const ref = `${repo}#${t.record.pr!.number}`;
+      const sha = t.mergeSha;
+      const bySha = (s: string) => sha !== null && (s === sha || (s.length >= 7 && sha.startsWith(s)) || (sha.length >= 7 && s.startsWith(sha)));
+      for (const i of incidents) {
+        if (!i.linkedPrs.includes(ref) && !i.commitShas.some(bySha)) continue;
+        out.push({
+          taskId: t.record.id,
+          ref: `incident:${i.id}`,
+          outcome: { kind: "incident_linked", source: this.name, detail: `incident ${i.id} (${i.severity}): ${i.title}`, at: i.startedAt, arrivedAt: now },
+        });
+      }
+      const firstPerEnv = new Map<string, Deployment>();
+      for (const d of deployments) {
+        if (!d.success || d.repo !== repo || !bySha(d.commitSha)) continue;
+        const seen = firstPerEnv.get(d.environment);
+        if (!seen || d.deployedAt < seen.deployedAt) firstPerEnv.set(d.environment, d);
+      }
+      for (const d of firstPerEnv.values()) {
+        out.push({
+          taskId: t.record.id,
+          ref: `deploy:${d.environment}`,
+          outcome: { kind: "deployed", source: this.name, detail: `deployed to ${d.environment} (${d.service}, deploy ${d.id})`, at: d.deployedAt, arrivedAt: now },
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Outcomes for one task not already on the record (deduplicated by kind + detail). */
   async outcomesFor(record: TaskRecord, now: string): Promise<Outcome[]> {
-    if (record.pr === null) return [];
-    const ref = `${record.source.repo.owner}/${record.source.repo.name}#${record.pr.number}`;
+    const m = mergeOf(record) ?? { record, mergeSha: null, mergedAt: record.updatedAt };
     const known = new Set(record.outcomes.map((o) => `${o.kind}|${o.detail}`));
-    return (await this.incidents())
-      .filter((i) => i.linkedPrs.includes(ref))
-      .map((i): Outcome => ({
-        kind: "incident_linked",
-        source: "dxfake",
-        detail: `incident ${i.id} (${i.severity}): ${i.title}`,
-        at: i.startedAt,
-        arrivedAt: now,
-      }))
-      .filter((o) => !known.has(`${o.kind}|${o.detail}`));
+    return (await this.poll([m], now)).map((f) => f.outcome).filter((o) => !known.has(`${o.kind}|${o.detail}`));
   }
 }

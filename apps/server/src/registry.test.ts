@@ -1,6 +1,9 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineProvider } from "@openfactory/contracts";
 import { describe, expect, it } from "vitest";
-import { loadSelections, parseFactoryFile, ProviderRegistry, selectionsFromEnv } from "./registry.js";
+import { loadOutcomeConfig, loadSelections, parseFactoryFile, ProviderRegistry, selectionsFromEnv } from "./registry.js";
 
 describe("factory.yaml", () => {
   it("parses short and long provider forms and rejects unknown abstractions", () => {
@@ -35,5 +38,25 @@ describe("ProviderRegistry", () => {
     expect((await reg.build("devEnvironment", { name: "none", options: {} })).name).toBe("none");
     await expect(reg.build("codeForge", { name: "github", options: {} })).rejects.toThrow(/does not provide/);
     expect(ProviderRegistry.packageFor("gitlab")).toBe("@openfactory/provider-gitlab");
+  });
+});
+
+describe("outcome sources", () => {
+  it("default to github, plus dxfake when it is configured; OUTCOMES=off turns them off", () => {
+    expect(loadOutcomeConfig({})).toEqual({ sources: [{ name: "github", options: {} }], windowDays: 30, intervalMs: 600_000 });
+    expect(loadOutcomeConfig({ DXFAKE_URL: "http://dx", DXFAKE_TOKEN: "t", OUTCOME_INTERVAL_MS: "60000" })!.sources.map((s) => s.name)).toEqual(["github", "dxfake"]);
+    expect(loadOutcomeConfig({ DXFAKE_URL: "http://dx", DXFAKE_TOKEN: "t", OUTCOME_INTERVAL_MS: "60000" })!.intervalMs).toBe(60_000);
+    expect(loadOutcomeConfig({ OUTCOMES: "off" })).toBeNull();
+  });
+
+  it("factory.yaml lists them", () => {
+    const dir = mkdtempSync(join(tmpdir(), "of-"));
+    const path = join(dir, "factory.yaml");
+    writeFileSync(path, "outcomes:\n  sources: [github, { dxfake: { url: http://dx } }]\n  windowDays: 14\n");
+    expect(loadOutcomeConfig({}, path)).toEqual({
+      sources: [{ name: "github", options: {} }, { name: "dxfake", options: { url: "http://dx" } }],
+      windowDays: 14,
+      intervalMs: 600_000,
+    });
   });
 });

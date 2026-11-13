@@ -10,6 +10,7 @@ import { Ledger } from "@openfactory/ledger";
 import { Validator } from "@seriousme/openapi-schema-validator";
 import { drizzle } from "drizzle-orm/pglite";
 import { expect, it } from "vitest";
+import { orgDeps } from "./test-org.js";
 import { createApp, fileEvidenceStore } from "./app.js";
 
 async function setup() {
@@ -33,6 +34,7 @@ async function setup() {
     now: () => new Date().toISOString(),
   });
   const app = createApp({
+    ...(await orgDeps()),
     ledger,
     onSignal: async () => null,
     evidence: fileEvidenceStore(mkdtempSync(join(tmpdir(), "ev-")), "https://f.example"),

@@ -111,7 +111,7 @@ export class Ledger implements LedgerReader {
         taskId: record.id,
         at,
         type: "task_created",
-        data: { source: record.source, title: record.title, factoryVersion: record.factoryVersion },
+        data: { source: record.source, title: record.title, factoryVersion: record.factoryVersion, requestedBy: record.requestedBy ?? null, labels: record.labels ?? [] },
         dedupeKey: input.dedupeKey ?? null,
       });
       return { record, appended: true };

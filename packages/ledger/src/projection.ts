@@ -11,6 +11,7 @@ import {
   Score,
   TaskStatus,
   Usage,
+  WorldCheckResult,
   type LedgerEvent,
   type TaskId,
   type TaskRecord,
@@ -62,6 +63,10 @@ export const EventData = {
   egress: z.object({ host: z.string(), allowed: z.boolean(), count: z.number().int().positive(), from: z.string(), to: z.string() }),
   /** A signal that changed nothing on the record by itself (merge/close); kept for de-duplication and the timeline. */
   signal_received: z.object({ type: z.string(), actor: z.string() }),
+  /** An OpenWorld run of a PR head (dedupe on world:<taskId>:<headSha>). Adds score checks.world. */
+  world_check: WorldCheckResult,
+  /** A person wrote to the task from the factory app (also posted where the task lives). */
+  message_received: z.object({ author: z.string(), text: z.string(), url: z.string().nullable() }),
 } as const;
 export type EventType = keyof typeof EventData;
 export type EventDataOf<T extends EventType> = z.infer<(typeof EventData)[T]>;
@@ -74,6 +79,8 @@ export type NewTask = {
   ask: string;
   harness: { name: string; model: string };
   at: string;
+  requestedBy?: string | null;
+  labels?: string[];
 };
 
 export function newRecord(input: NewTask): TaskRecord {
@@ -98,6 +105,8 @@ export function newRecord(input: NewTask): TaskRecord {
     evidence: [],
     scores: [],
     outcomes: [],
+    requestedBy: input.requestedBy ?? null,
+    labels: input.labels ?? [],
     createdAt: input.at,
     updatedAt: input.at,
   };
@@ -199,6 +208,11 @@ export function apply(record: TaskRecord, event: LedgerEvent): TaskRecord {
     }
     case "outcome_added":
       return { ...r, outcomes: [...r.outcomes, (d as EventDataOf<"outcome_added">).outcome] };
+    case "world_check": {
+      const w = d as EventDataOf<"world_check">;
+      const score = { scorer: "checks.world", scorerVersion: "1", value: w.status === "passed" ? 1 : 0, label: w.status, reason: `${w.world}, ${w.simDays} simulated days: ${w.invariants.filter((i) => !i.ok).map((i) => i.name).join(", ") || "every invariant held"}`, at: w.finishedAt };
+      return { ...r, worldChecks: [...(r.worldChecks ?? []), w], scores: [...r.scores.filter((x) => x.scorer !== "checks.world"), score] };
+    }
     default:
       return r;
   }
