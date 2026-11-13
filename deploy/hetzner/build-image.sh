@@ -44,6 +44,8 @@ spec:
         - { name: out, hostPath: { path: /var/lib/factory-images, type: DirectoryOrCreate } }
         - { name: cache, hostPath: { path: /var/lib/factory-buildkit, type: DirectoryOrCreate } }
 YAML
-echo "job/$name started"; kubectl -n factory-system wait --for=condition=complete job/$name --timeout=1500s \
-  || { kubectl -n factory-system logs job/$name -c build --tail=40; exit 1; }
+echo "job/$name started"
+# Use a branch or tag as the ref (BuildKit can't fetch a bare short sha). Stop on Failed, not only on timeout.
+until s=$(kubectl -n factory-system get job/$name -o jsonpath='{.status.conditions[*].type}') && [[ "$s" =~ Complete|Failed ]]; do sleep 10; done
+if [[ "$s" =~ Failed ]]; then kubectl -n factory-system logs job/$name -c build --tail=40; exit 1; fi
 kubectl -n factory-system logs job/$name -c import --tail=3
