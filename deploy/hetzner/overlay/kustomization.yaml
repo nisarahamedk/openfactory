@@ -1,0 +1,30 @@
+# This VM's instance of deploy/k8s. Images are built in-cluster by ../build-image.sh and imported into
+# k3s containerd (no registry), so the tag here must match what was built.
+#   kubectl apply -k deploy/hetzner/overlay
+# Hosts use the dotted IP so they match the certbot cert the VM issued at boot
+# (factory., dashboard., dx.<ip>.sslip.io); no per-host ACME needed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../k8s
+images:
+  - name: ghcr.io/nisarahamedk/openfactory
+    newName: openfactory
+    newTag: 02c1e34
+patches:
+  - target: { kind: Ingress, name: factory }
+    patch: |-
+      - { op: replace, path: /spec/rules/0/host, value: factory.178.105.22.96.sslip.io }
+      - { op: replace, path: /spec/rules/1/host, value: dashboard.178.105.22.96.sslip.io }
+      - { op: replace, path: /spec/rules/2/host, value: dx.178.105.22.96.sslip.io }
+  - target: { kind: Deployment, name: openfactory }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1
+        value: { name: PUBLIC_URL, value: "https://factory.178.105.22.96.sslip.io" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: WORKER_IMAGE, value: "openfactory-worker:dev" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: FACTORY_DOMAIN, value: "178.105.22.96.sslip.io" }

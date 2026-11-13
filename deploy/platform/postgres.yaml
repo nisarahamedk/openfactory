@@ -1,0 +1,48 @@
+# Single Postgres for the factory (ledger, LiteLLM spend). Secret `postgres` is created by
+# deploy/hetzner/bootstrap.sh (POSTGRES_PASSWORD, DATABASE_URL, LITELLM_DATABASE_URL).
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: postgres-init, namespace: factory }
+data:
+  01-litellm.sql: |
+    -- LiteLLM gets its own database: it manages its schema with prisma and must not see the ledger's tables.
+    CREATE DATABASE litellm;
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: postgres-data, namespace: factory }
+spec: { accessModes: [ReadWriteOnce], storageClassName: local-path, resources: { requests: { storage: 10Gi } } }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: postgres, namespace: factory }
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector: { matchLabels: { app: postgres } }
+  template:
+    metadata: { labels: { app: postgres } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17.6-alpine
+          env:
+            - { name: POSTGRES_USER, value: factory }
+            - { name: POSTGRES_DB, value: factory }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres, key: POSTGRES_PASSWORD } }
+          ports: [{ containerPort: 5432 }]
+          readinessProbe: { exec: { command: [pg_isready, -U, factory] }, periodSeconds: 5 }
+          resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: postgres-data } }
+        - { name: init, configMap: { name: postgres-init } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: postgres, namespace: factory }
+spec: { selector: { app: postgres }, ports: [{ port: 5432 }] }
