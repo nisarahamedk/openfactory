@@ -232,7 +232,11 @@ export interface AgentSession {
 /** Where the agent's tools run (a sandbox pod, a container, a VM). */
 export interface Workspace {
   readonly name: string;
-  create(input: { taskId: TaskId; repo: RepoRef; branch: string; image: string | null }): Promise<WorkspaceHandle>;
+  /**
+   * Clone `repo` and check out `branch` (made from `startRef` when given, e.g. a
+   * benchmark's start commit; else from the remote branch or the default branch).
+   */
+  create(input: { taskId: TaskId; repo: RepoRef; branch: string; image: string | null; startRef?: string | null }): Promise<WorkspaceHandle>;
   get(id: string): Promise<WorkspaceHandle | null>;
 }
 

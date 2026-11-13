@@ -51,6 +51,7 @@ export async function runAttempt(task: BenchmarkTask, arm: ReplayArm, attempt: n
       repo: task.repo,
       branch: `bench/${task.id}/${arm.label}/${attempt}`.toLowerCase(),
       image: null,
+      startRef: task.startCommit,
     });
     const cwd = ws.repoPath;
     await must(ws, ["git", "fetch", "--quiet", "origin", task.startCommit], cwd).catch(() => undefined); // may already be present

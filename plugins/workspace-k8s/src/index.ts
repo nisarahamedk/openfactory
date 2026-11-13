@@ -3,9 +3,14 @@
  *
  * Layout on the volume (mounted at /work):
  *   /work/repo   the checkout (the agent's cwd)
- *   /work/home   $HOME: git credentials, Claude Code's config and session
+ *   /work/home   $HOME: Claude Code's config and session
  *                transcripts, evidence/. Kept across sleep, so a woken
  *                workspace resumes the same agent session.
+ *
+ * The clone happens in an init container that reads a GitHub token from a
+ * short-lived Secret; the agent's container never holds a GitHub credential
+ * (the origin URL has none, and nothing is written to $HOME). Pushes go
+ * through the factory, not the sandbox.
  *
  * Sleep deletes the pod and keeps the volume; wake makes the pod again.
  * Commands run through the Kubernetes exec API, so the factory needs no
@@ -53,26 +58,53 @@ export class K8sWorkspace implements Workspace {
     this.core = options.kubeConfig.makeApiClient(k8s.CoreV1Api);
   }
 
-  async create(input: { taskId: TaskId; repo: RepoRef; branch: string; image: string | null }): Promise<WorkspaceHandle> {
+  async create(input: {
+    taskId: TaskId;
+    repo: RepoRef;
+    branch: string;
+    image: string | null;
+    startRef?: string | null;
+  }): Promise<WorkspaceHandle> {
     const name = resourceName(input.taskId);
     await this.ensureVolume(name, input.taskId);
-    const handle = this.handle(name, input.image ?? this.options.image, input.taskId);
-    await handle.wake();
-    // Git reads credentials from $HOME on the volume; the job may overwrite the
-    // file later with its own short-lived push token.
-    await handle.mustExec(["git", "config", "--global", "credential.helper", `store --file=${HOME}/.git-credentials`], { cwd: WORK });
     const token = await this.options.cloneToken(input.repo);
-    if (token !== null) {
-      await handle.writeFile(`${HOME}/.git-credentials`, `https://x-access-token:${token}@github.com\n`);
+    const secretName = `${name}-git`.slice(0, 63);
+    if (token !== null) await this.putTokenSecret(secretName, input.taskId, token);
+    const handle = this.handle(name, input.image ?? this.options.image, input.taskId, {
+      repoUrl: `https://github.com/${input.repo.owner}/${input.repo.name}.git`,
+      branch: input.branch,
+      startRef: input.startRef ?? "",
+      tokenSecret: secretName,
+    });
+    try {
+      await handle.wake();
+    } finally {
+      // The token is only needed while the init container clones.
+      if (token !== null) await this.deleteSecret(secretName);
     }
-    const cloned = await handle.exec(["test", "-d", `${REPO}/.git`], { cwd: WORK });
-    if (cloned.exitCode !== 0) {
-      const url = `https://github.com/${input.repo.owner}/${input.repo.name}.git`;
-      await handle.mustExec(["git", "clone", "--filter=blob:none", url, REPO], { cwd: WORK, timeoutMs: 600_000 });
-    }
-    const remoteBranch = await handle.exec(["git", "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${input.branch}`]);
-    await handle.mustExec(remoteBranch.exitCode === 0 ? ["git", "checkout", input.branch] : ["git", "checkout", "-B", input.branch]);
     return handle;
+  }
+
+  private async putTokenSecret(name: string, taskId: string, token: string): Promise<void> {
+    const body: k8s.V1Secret = {
+      metadata: { name, labels: { "openfactory.dev/task": taskId, "app.kubernetes.io/managed-by": "openfactory" } },
+      type: "Opaque",
+      stringData: { GITHUB_TOKEN: token },
+    };
+    try {
+      await this.core.createNamespacedSecret({ namespace: this.options.namespace, body });
+    } catch (error) {
+      if (!isConflict(error)) throw error;
+      await this.core.replaceNamespacedSecret({ name, namespace: this.options.namespace, body });
+    }
+  }
+
+  private async deleteSecret(name: string): Promise<void> {
+    try {
+      await this.core.deleteNamespacedSecret({ name, namespace: this.options.namespace });
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
   }
 
   async get(id: string): Promise<WorkspaceHandle | null> {
@@ -87,8 +119,8 @@ export class K8sWorkspace implements Workspace {
     }
   }
 
-  private handle(name: string, image: string, taskId: string): K8sWorkspaceHandle {
-    return new K8sWorkspaceHandle(name, this.options, this.core, image, taskId);
+  private handle(name: string, image: string, taskId: string, clone: CloneSpec | null = null): K8sWorkspaceHandle {
+    return new K8sWorkspaceHandle(name, this.options, this.core, image, taskId, clone);
   }
 
   private async ensureVolume(name: string, taskId: string): Promise<void> {
@@ -130,6 +162,42 @@ export class WorkspaceStartTimeout extends Error {
   }
 }
 
+/** What the init container clones when the volume has no checkout yet. */
+interface CloneSpec {
+  repoUrl: string;
+  branch: string;
+  /** Commit or ref to start from (benchmark replays); empty for the default branch. */
+  startRef: string;
+  /** Secret holding GITHUB_TOKEN; optional, so a missing Secret means an anonymous clone. */
+  tokenSecret: string;
+}
+
+/**
+ * Runs in the init container. Clones only if the volume has no checkout, so a
+ * wake after sleep keeps the agent's work. The token goes in a one-off header,
+ * never into the repo's config or the volume.
+ */
+export const CLONE_SCRIPT = `set -eu
+mkdir -p ${HOME}
+if [ -d ${REPO}/.git ]; then echo "checkout present"; exit 0; fi
+if [ -z "\${REPO_URL:-}" ]; then echo "no checkout and nothing to clone" >&2; exit 1; fi
+AUTH=""
+if [ -n "\${GITHUB_TOKEN:-}" ]; then AUTH="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"; fi
+git -c "http.extraHeader=$AUTH" clone "$REPO_URL" ${REPO}
+cd ${REPO}
+if [ -n "\${START_REF:-}" ]; then
+  git -c "http.extraHeader=$AUTH" fetch origin "$START_REF" || true
+  git checkout --quiet --detach "$START_REF" 2>/dev/null || git checkout --quiet --detach FETCH_HEAD
+fi
+if [ -z "\${START_REF:-}" ] && git rev-parse --verify --quiet "refs/remotes/origin/$TASK_BRANCH" >/dev/null; then
+  git checkout --quiet -B "$TASK_BRANCH" "origin/$TASK_BRANCH"
+else
+  git checkout --quiet -B "$TASK_BRANCH"
+fi
+git config --unset-all http.extraHeader || true
+echo "cloned $REPO_URL at $(git rev-parse HEAD) on $TASK_BRANCH"
+`;
+
 class K8sWorkspaceHandle implements WorkspaceHandle {
   readonly repoPath = REPO;
   private readonly exec_: k8s.Exec;
@@ -141,6 +209,7 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
     private readonly core: k8s.CoreV1Api,
     private readonly image: string,
     private readonly taskId: string,
+    private readonly clone: CloneSpec | null,
   ) {
     this.exec_ = new k8s.Exec(options.kubeConfig);
   }
@@ -275,6 +344,29 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
         enableServiceLinks: false,
         ...(this.options.runtimeClassName === null ? {} : { runtimeClassName: this.options.runtimeClassName }),
         terminationGracePeriodSeconds: 5,
+        initContainers: [
+          {
+            name: "clone",
+            image: this.image,
+            imagePullPolicy: "IfNotPresent",
+            command: ["sh", "-c", CLONE_SCRIPT],
+            workingDir: WORK,
+            env: [
+              { name: "HOME", value: "/tmp" }, // nothing the clone writes to $HOME lands on the volume
+              { name: "REPO_URL", value: this.clone?.repoUrl ?? "" },
+              { name: "TASK_BRANCH", value: this.clone?.branch ?? "" },
+              { name: "START_REF", value: this.clone?.startRef ?? "" },
+              ...(this.clone === null
+                ? []
+                : [{ name: "GITHUB_TOKEN", valueFrom: { secretKeyRef: { name: this.clone.tokenSecret, key: "GITHUB_TOKEN", optional: true } } }]),
+            ],
+            resources: {
+              requests: { cpu: resources.cpu, memory: "256Mi" },
+              limits: { cpu: resources.cpuLimit, memory: "1Gi" },
+            },
+            volumeMounts: [{ name: "work", mountPath: WORK }],
+          },
+        ],
         containers: [
           {
             name: CONTAINER,
