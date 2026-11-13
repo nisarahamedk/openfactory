@@ -7,6 +7,11 @@
 package_update: true
 packages: [curl, jq, open-iscsi, certbot]
 write_files:
+  - path: /etc/sysctl.d/90-factory-inotify.conf
+    content: |
+      # Many dev servers (Vite) per node: each task environment watches its whole source tree.
+      fs.inotify.max_user_watches=1048576
+      fs.inotify.max_user_instances=8192
   - path: /etc/rancher/k3s/tokens.csv
     permissions: "0600"
     content: |
