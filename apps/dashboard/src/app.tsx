@@ -462,6 +462,6 @@ export function createDashboard(
   return app;
 }
 
-const factorySlugOf = (t: TaskRecord, teams: readonly Team[]) => factoryFor(teams, { requestedBy: t.requestedBy, repo: t.source.repo });
+const factorySlugOf = (t: TaskRecord, teams: readonly Team[]) => t.factory ?? factoryFor(teams, { requestedBy: t.requestedBy, repo: t.source.repo });
 
 export { filterQuery, scopeParam };
