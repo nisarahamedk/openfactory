@@ -34,6 +34,12 @@ it("serves tasks, signals and evidence behind the API token", async () => {
   expect((await app.request("/v1/signals", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify(sig) })).status).toBe(202);
   expect(got).toHaveLength(1);
 
+  const egress = { entries: [{ taskId: "task_a1", host: "evil.example", allowed: false, count: 3, from: "2026-01-01T00:00:00Z", to: "2026-01-01T00:01:00Z" }] };
+  const post = () => app.request("/v1/egress", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify(egress) });
+  expect(await (await post()).json()).toEqual({ recorded: 1 });
+  await post(); // a repeated report is recorded once
+  expect((await ledger.events("task_a1")).filter((e) => e.type === "egress")).toHaveLength(1);
+
   const { url } = await evidence.put("task_a1", "abc-shot.png", new Uint8Array([1, 2, 3]), "image/png");
   expect(url).toBe("https://f.example/evidence/task_a1/abc-shot.png");
   const res = await app.request("/evidence/task_a1/abc-shot.png");

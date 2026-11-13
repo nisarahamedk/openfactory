@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BenchmarkTask, LedgerEvent, Signal, TaskRecord, TaskStatus } from "@openfactory/contracts";
+import { BenchmarkTask, LedgerEvent, Signal, TaskId, TaskRecord, TaskStatus } from "@openfactory/contracts";
 import { ArmSpec, BenchRun } from "@openfactory/bench";
 
 /** Error body every /v1 route returns on failure. */
@@ -34,6 +34,22 @@ const notFound = { 404: { description: "Not found", schema: ApiError } };
 const bad = { 400: { description: "Invalid request", schema: ApiError } };
 
 /** Every /v1 route the factory server serves. A server test fails when this list drifts from the real routes. */
+/** Body of POST /v1/egress. */
+export const EgressReport = z.object({
+  entries: z
+    .array(
+      z.object({
+        taskId: TaskId,
+        host: z.string().max(253),
+        allowed: z.boolean(),
+        count: z.number().int().positive(),
+        from: z.string(),
+        to: z.string(),
+      }),
+    )
+    .max(5000),
+});
+
 export const V1_ROUTES: RouteSpec[] = [
   {
     method: "get",
@@ -64,6 +80,14 @@ export const V1_ROUTES: RouteSpec[] = [
     summary: "Inject a signal (issue labelled, comment, merge...) as if a signal source had sent it",
     body: Signal,
     responses: { 202: { description: "Accepted", schema: z.object({ result: z.unknown() }) }, ...bad },
+  },
+  {
+    method: "post",
+    path: "/egress",
+    operationId: "reportEgress",
+    summary: "The egress proxy's per-task log of hosts each sandbox reached or was denied; recorded as egress events",
+    body: EgressReport,
+    responses: { 202: { description: "Recorded", schema: z.object({ recorded: z.number().int() }) }, ...bad },
   },
   {
     method: "post",
