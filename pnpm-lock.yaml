@@ -52,6 +52,33 @@ importers:
         specifier: workspace:*
         version: link:../contracts
 
+  packages/scoring:
+    dependencies:
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+
+  plugins/metrics-dxfake:
+    dependencies:
+      '@hono/node-server':
+        specifier: 1.19.6
+        version: 1.19.6(hono@4.10.4)
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@openfactory/scoring':
+        specifier: workspace:*
+        version: link:../../packages/scoring
+      hono:
+        specifier: 4.10.4
+        version: 4.10.4
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+
 packages:
 
   '@electric-sql/pglite@0.5.16':
@@ -212,6 +239,12 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@hono/node-server@1.19.6':
+    resolution: {integrity: sha512-Shz/KjlIeAhfiuE93NDKVdZ7HdBVLQAfdbaXEaoAVO3ic9ibRSLGIQGkcBbFyuLr+7/1D5ZCINM8B+6IvXeMtw==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: ^4
 
   '@jridgewell/sourcemap-codec@1.6.0':
     resolution: {integrity: sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==}
@@ -543,6 +576,10 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  hono@4.10.4:
+    resolution: {integrity: sha512-YG/fo7zlU3KwrBL5vDpWKisLYiM+nVstBQqfr7gCPbSYURnNEP9BDxEMz8KfsDR9JX0lJWDRNc6nXX31v7ZEyg==}
+    engines: {node: '>=16.9.0'}
+
   js-tokens@9.0.1:
     resolution: {integrity: sha512-mxa9E9ITFOt0ban3j6L5MpjwegGz6lBQmM1IJkWeBZGcMxto50+eWdjC/52xDbS2vy0k7vIMK0Fe2wfL9OQSpQ==}
 
@@ -830,6 +867,10 @@ snapshots:
   '@esbuild/win32-x64@0.28.2':
     optional: true
 
+  '@hono/node-server@1.19.6(hono@4.10.4)':
+    dependencies:
+      hono: 4.10.4
+
   '@jridgewell/sourcemap-codec@1.6.0': {}
 
   '@rollup/rollup-android-arm-eabi@4.68.2':
@@ -1037,6 +1078,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  hono@4.10.4: {}
 
   js-tokens@9.0.1: {}
 
