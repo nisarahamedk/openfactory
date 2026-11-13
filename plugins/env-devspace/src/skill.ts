@@ -77,7 +77,7 @@ Put files in \`${input.evidenceDir}/\` and list them in \`${input.evidenceDir}/m
 
 ## Hand over
 
-- Push your branch (\`git push -u origin HEAD\`). Do not open the pull request; the factory opens it and posts your evidence.
+- Commit on your branch; do not push. The factory pushes your branch, opens the pull request and posts your evidence when you stop.
 - Finish your turn with a short summary: what changed, how you tested it, and anything the reviewer should look at.
 - During review rounds, the same environment is still yours: redeploy, retest and refresh the evidence after each fix.
 ${input.notes === "" ? "" : `\n## Notes for this repo\n\n${input.notes}\n`}`;
