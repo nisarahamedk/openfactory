@@ -1,0 +1,8 @@
+apiVersion: v2
+name: openfactory
+description: SlopwareFactory self-hosted - control plane (server, dashboard), model gateway (LiteLLM), sandbox egress proxy, and the RBAC and NetworkPolicies for agent workspaces.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+keywords: [agents, coding-agents, factory, self-hosted]

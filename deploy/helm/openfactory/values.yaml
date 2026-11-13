@@ -1,0 +1,166 @@
+# SlopwareFactory self-hosted install. Every secret is referenced by Secret name and key; the chart
+# never takes a secret value, except the ones it generates for itself (see `generated`).
+# Quickstart and cloud notes: docs/self-host.md.
+
+image:
+  repository: ghcr.io/nisarahamedk/openfactory
+  tag: latest            # pin a commit SHA in production
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Public URL reviewers open (evidence links, transcripts). Usually the server's ingress host.
+publicUrl: https://factory.example.com
+
+# Repositories the factory watches, owner/name.
+repos: []                # e.g. [acme/app]
+label: factory           # issues with this label become tasks
+baseBranch: main
+botLogins: []            # extra bot logins whose comments never start work
+
+# factory.yaml (docs/plugins.md): providers, models, per-provider options. Mounted at
+# /etc/openfactory/factory.yaml. Anything it leaves out falls back to the env the chart sets.
+factory:
+  providers:
+    codeForge: github
+    chat: github
+    agent: acp
+    workspace: k8s
+    devEnvironment: none   # "devspace" when repos ship a devspace.yaml (see environments.devspace)
+  models:
+    default: claude-sonnet
+    routes:
+      - { model: claude-haiku, labels: [ui, small, test, demo, docs] }
+
+# Secrets you create before installing (kubectl create secret generic ...). Names only.
+secrets:
+  github:                # GitHub token: fine-grained, the factory's repos only (Contents, Issues, PRs: RW; Actions, Statuses: R)
+    name: openfactory-github
+    key: GITHUB_TOKEN
+  githubWebhook:         # optional; only with signals: webhook|both
+    name: ""
+    key: GITHUB_WEBHOOK_SECRET
+  # Provider API keys for LiteLLM, exposed to the LiteLLM pod only, by env var name.
+  modelProviders:
+    - { env: ANTHROPIC_API_KEY, name: openfactory-anthropic, key: ANTHROPIC_API_KEY }
+
+# Secrets the chart generates once and keeps across upgrades (lookup). Set `existingSecret` to bring your own
+# Secret with the same keys instead: FACTORY_API_TOKEN, LITELLM_MASTER_KEY, DASHBOARD_PASSWORD.
+generated:
+  existingSecret: ""
+
+signals:
+  mode: poll             # poll | webhook | both
+  pollIntervalMs: 20000
+
+limits:
+  maxTaskUsd: 8          # per-task model key budget
+  maxReviewRounds: 4
+  maxNudges: 2
+
+server:
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+  extraEnv: []           # [{ name, value }] or valueFrom; see apps/server/src/config.ts
+  nodeSelector: {}
+  tolerations: []
+
+dashboard:
+  enabled: true
+  models: [claude-haiku, claude-sonnet]
+  resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 256Mi } }
+
+persistence:
+  size: 5Gi
+  storageClass: ""       # "" = cluster default
+
+# Bundled Postgres for the factory ledger and LiteLLM. Disable to use your own (RDS, Cloud SQL, Azure DB).
+postgres:
+  enabled: true
+  image: postgres:17.6-alpine
+  size: 10Gi
+  storageClass: ""
+  resources: { requests: { cpu: 50m, memory: 256Mi }, limits: { memory: 1Gi } }
+externalDatabase:        # used when postgres.enabled=false; Secret with two URLs
+  secretName: ""
+  factoryUrlKey: DATABASE_URL           # postgres://... for the factory
+  litellmUrlKey: LITELLM_DATABASE_URL   # a separate database for LiteLLM
+
+# Model gateway. Sandboxes only ever get a per-task key capped at limits.maxTaskUsd.
+litellm:
+  image: ghcr.io/berriai/litellm-database:main-stable
+  budgetUsd: 60          # proxy-wide cap per budgetDuration
+  budgetDuration: 30d
+  workerModel: claude-sonnet
+  foremanModel: claude-haiku
+  taskKeyModels: [claude-sonnet, claude-haiku]
+  # Prices are explicit so budgets hold even for models LiteLLM's price map doesn't know.
+  models:
+    - name: claude-sonnet
+      model: anthropic/claude-sonnet-5-5
+      apiKeyEnv: ANTHROPIC_API_KEY
+      cost: { input: 0.000002, output: 0.00001, cacheRead: 0.0000001, cacheWrite: 0.0000025 }
+    - name: claude-haiku
+      model: anthropic/claude-haiku-5-5
+      apiKeyEnv: ANTHROPIC_API_KEY
+      cost: { input: 0.0000001, output: 0.0000005, cacheRead: 0.00000001, cacheWrite: 0.000000125 }
+  resources: { requests: { cpu: 100m, memory: 512Mi }, limits: { memory: 1536Mi } }
+
+# Agent workspaces (one pod per task).
+workspaces:
+  namespace: factory-workspaces
+  createNamespace: true
+  podSecurity: baseline  # PodSecurity admission level for the namespace
+  image: ghcr.io/nisarahamedk/openfactory-worker:latest
+  runtimeClassName: ""   # e.g. gvisor
+  storage: 10Gi
+  storageClass: ""
+  resources: { cpu: 500m, memory: 2Gi, cpuLimit: "2", memoryLimit: 6Gi }
+
+# Per-task running environments (devEnvironment: devspace).
+environments:
+  devspace:
+    namespacePrefix: task-
+    appUrlTemplate: ""      # e.g. https://{namespace}.apps.example.com
+    deployCommand: "devspace dev --namespace {namespace}"
+    copySecrets: []         # ["<namespace>/<secret>"] copied into each task namespace
+    agentVars: {}           # extra env for the agent, e.g. { FACTORY_DOMAIN: apps.example.com }
+
+# Sandbox egress: deny by default, allowlist through a proxy, every request logged per task.
+egress:
+  enabled: true
+  image: ubuntu/squid:6.6-24.04_edge
+  collectorImage: python:3.13-alpine
+  # One host per entry; a leading dot allows all subdomains.
+  allow:
+    - github.com
+    - api.github.com
+    - codeload.github.com
+    - objects.githubusercontent.com
+    - raw.githubusercontent.com
+    - registry.npmjs.org
+  noProxy: "localhost,127.0.0.1,::1,.svc,.cluster.local"
+
+networkPolicy:
+  enabled: true
+  # Where the ingress controller runs (it must reach the server and dashboard).
+  ingressControllerNamespaceSelector:
+    matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
+  dns:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+    podSelector: { matchLabels: { k8s-app: kube-dns } }
+  # The Kubernetes API endpoints sandboxes may reach (kubectl/devspace with a task-scoped token).
+  # Empty: looked up from the default/kubernetes EndpointSlice at install time.
+  kubeApi:
+    cidrs: []
+    ports: [443, 6443]
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  server: { host: factory.example.com }
+  dashboard: { host: dashboard.example.com }
+  tls: []                # [{ secretName, hosts: [...] }]
+
+# Fake DX metrics service (demo only).
+dxfake:
+  enabled: false
