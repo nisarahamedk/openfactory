@@ -26,6 +26,12 @@ export interface DevspaceEnvironmentOptions {
   quota: { cpu: string; memory: string; pods: string };
   /** Extra lines appended to the skill (team-specific know-how). */
   skillNotes: string;
+  /** Secrets copied into every task namespace on create, e.g. app dev keys. */
+  copySecrets: Array<{ namespace: string; name: string }>;
+  /** Extra env vars for the agent (e.g. FACTORY_DOMAIN the repo's devspace.yaml reads). */
+  agentVars: Record<string, string>;
+  /** How the agent deploys; `{namespace}` replaced. */
+  deployCommand: string;
 }
 
 const MANAGED = { "app.kubernetes.io/managed-by": "openfactory" };
@@ -116,7 +122,24 @@ export class DevspaceEnvironment implements Environment {
         },
       }),
     );
+    for (const source of this.options.copySecrets) await this.copySecret(source, namespace);
     return this.handle(namespace, input.taskId);
+  }
+
+  /** Copies a Secret into the task namespace, replacing an older copy so values stay current. */
+  private async copySecret(source: { namespace: string; name: string }, namespace: string): Promise<void> {
+    const original = await this.core.readNamespacedSecret({ name: source.name, namespace: source.namespace });
+    const body: k8s.V1Secret = {
+      metadata: { name: source.name, labels: { ...MANAGED, "openfactory.dev/copied-from": source.namespace } },
+      type: original.type ?? "Opaque",
+      data: original.data ?? {},
+    };
+    try {
+      await this.core.createNamespacedSecret({ namespace, body });
+    } catch (error) {
+      if (statusCode(error) !== 409) throw error;
+      await this.core.replaceNamespacedSecret({ name: source.name, namespace, body });
+    }
   }
 
   async get(name: string): Promise<EnvironmentHandle | null> {
@@ -191,6 +214,7 @@ class DevspaceEnvironmentHandle implements EnvironmentHandle {
 
   async envVars(): Promise<Record<string, string>> {
     return {
+      ...this.options.agentVars,
       KUBECONFIG: this.kubeconfigPath,
       FACTORY_ENV_NAMESPACE: this.name,
       FACTORY_ENV_URL: this.appUrl,
@@ -208,6 +232,7 @@ class DevspaceEnvironmentHandle implements EnvironmentHandle {
       evidenceDir: `${this.options.workspaceHome}/evidence`,
       taskId: this.taskId,
       notes: this.options.skillNotes,
+      deployCommand: this.options.deployCommand.replaceAll("{namespace}", this.name),
     });
   }
 
@@ -305,7 +330,26 @@ export function fromEnv(env: Env): DevspaceEnvironment {
       pods: env.ENV_QUOTA_PODS ?? "20",
     },
     skillNotes: env.ENV_SKILL_NOTES ?? "",
+    copySecrets: parseList(env.ENV_COPY_SECRETS).map((item) => {
+      const [namespace, name] = item.split("/");
+      if (namespace === undefined || name === undefined || name === "") {
+        throw new Error(`env-devspace: ENV_COPY_SECRETS entries are <namespace>/<name>, got "${item}"`);
+      }
+      return { namespace, name };
+    }),
+    agentVars: Object.fromEntries(
+      parseList(env.ENV_AGENT_VARS).map((item) => {
+        const at = item.indexOf("=");
+        if (at <= 0) throw new Error(`env-devspace: ENV_AGENT_VARS entries are KEY=value, got "${item}"`);
+        return [item.slice(0, at), item.slice(at + 1)];
+      }),
+    ),
+    deployCommand: env.ENV_DEPLOY_COMMAND ?? "devspace deploy --namespace {namespace}",
   });
+}
+
+function parseList(value: string | undefined): string[] {
+  return (value ?? "").split(",").map((v) => v.trim()).filter((v) => v !== "");
 }
 
 export const createDevspaceEnvironment = (options: DevspaceEnvironmentOptions): DevspaceEnvironment =>

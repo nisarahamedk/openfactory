@@ -7,7 +7,7 @@ test("namespace names are valid Kubernetes names", () => {
 });
 
 test("the skill names the namespace, URL and evidence convention", () => {
-  const skill = renderSkill({ namespace: "task-7f3a", appUrl: "https://task-7f3a.1.2.3.4.sslip.io", environmentName: "devspace:task-7f3a", evidenceDir: "/work/home/evidence", taskId: "task_7f3a", notes: "" });
+  const skill = renderSkill({ namespace: "task-7f3a", appUrl: "https://task-7f3a.1.2.3.4.sslip.io", environmentName: "devspace:task-7f3a", evidenceDir: "/work/home/evidence", taskId: "task_7f3a", notes: "", deployCommand: "devspace deploy --namespace task-7f3a" });
   expect(skill).toMatch(/^---\nname: factory-environment\n/);
   expect(skill).toContain("devspace deploy --namespace task-7f3a");
   expect(skill).toContain("/work/home/evidence/manifest.json");

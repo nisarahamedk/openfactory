@@ -9,6 +9,8 @@ export interface SkillInput {
   evidenceDir: string;
   taskId: string;
   notes: string;
+  /** The exact command that deploys this repo into the namespace. */
+  deployCommand: string;
 }
 
 export function renderSkill(input: SkillInput): string {
@@ -31,11 +33,18 @@ Nobody else uses it. Your kubeconfig ($KUBECONFIG) can only reach this namespace
 2. Deploy from the repo root with DevSpace (the repo's \`devspace.yaml\` says how the product is built and run):
 
    \`\`\`sh
-   devspace deploy --namespace ${input.namespace} --skip-push-local-kube
+   ${input.deployCommand}
    \`\`\`
 
-3. Wait until it is up: \`kubectl get pods\`, \`kubectl logs deploy/<name>\`, and \`curl -fsS ${input.appUrl}\`.
-   If it does not come up, read the logs and fix it. Do not hand over work you have not seen running.
+   If the command keeps running (for example \`devspace dev\`, which syncs your edits into the running app),
+   start it in the background with its output in a log file, e.g. \`nohup <command> > $HOME/devspace.log 2>&1 &\`,
+   and read the log. It keeps syncing while you work; you don't need to redeploy after each edit.
+
+3. Wait until it is up: \`kubectl get pods\`, \`kubectl logs <pod>\`, and \`curl -fsS ${input.appUrl}\`.
+   The first start can take a few minutes (dependency install). If it does not come up, read the logs and fix it.
+   Do not hand over work you have not seen running.
+4. A review round may start after a pause in which your workspace was restarted: check the deploy is still
+   running (\`pgrep -fa devspace\`, \`curl -fsS ${input.appUrl}\`) and start it again if not.
 
 ## Test end to end
 

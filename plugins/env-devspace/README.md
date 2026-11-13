@@ -2,7 +2,7 @@
 
 One Kubernetes namespace per task (`task-<id>`). The agent deploys the product there with DevSpace and tests against it.
 
-- `create`: namespace, ResourceQuota + LimitRange, ServiceAccount `agent`, Role + RoleBinding limited to that namespace.
+- `create`: namespace, ResourceQuota + LimitRange, ServiceAccount `agent`, Role + RoleBinding limited to that namespace, and copies of the Secrets in `ENV_COPY_SECRETS`.
 - `credentialsForWorkspace`: a kubeconfig with a fresh short-lived token (TokenRequest), and the skill file at
   `$HOME/.claude/skills/factory-environment/SKILL.md`. Call it again after every wake to refresh the token.
 - `envVars`: `KUBECONFIG`, `FACTORY_ENV_NAMESPACE`, `FACTORY_ENV_URL`, `FACTORY_ENV_NAME`, `FACTORY_EVIDENCE_DIR`, `DEVSPACE_NAMESPACE`.
@@ -24,7 +24,10 @@ The repo must carry a `devspace.yaml` that deploys the product into the current 
 | `ENV_WORKSPACE_HOME` | no | Default `/work/home` (matches workspace-k8s). |
 | `ENV_QUOTA_CPU`, `ENV_QUOTA_MEMORY`, `ENV_QUOTA_PODS` | no | Default `3`, `4Gi`, `20`. |
 | `ENV_SKILL_NOTES` | no | Extra markdown for the skill (repo-specific know-how). |
+| `ENV_COPY_SECRETS` | no | Secrets copied into each task namespace on create, `ns/name,ns/name` (e.g. `factory/firstword-dev`). Re-copied on every create, so values stay current. |
+| `ENV_AGENT_VARS` | no | Extra env for the agent, `KEY=value,KEY=value` (e.g. `FACTORY_DOMAIN=1.2.3.4.sslip.io`, read by the repo's devspace.yaml). |
+| `ENV_DEPLOY_COMMAND` | no | The deploy command the skill tells the agent to run, `{namespace}` replaced. Default `devspace deploy --namespace {namespace}`; FirstWord uses `devspace dev --namespace {namespace}` (stays attached and syncs edits). |
 
-RBAC the factory needs: namespaces (get, create, delete); in task namespaces: serviceaccounts (create), serviceaccounts/token (create),
+RBAC the factory needs: secrets (get) in each source namespace of ENV_COPY_SECRETS; namespaces (get, create, delete); in task namespaces: serviceaccounts (create), serviceaccounts/token (create),
 configmaps (get), resourcequotas and limitranges (create), roles and rolebindings (create), deployments and statefulsets (list, update),
 plus every permission the agent Role grants (Kubernetes refuses to grant what the granter lacks).

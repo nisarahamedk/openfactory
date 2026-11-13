@@ -58,6 +58,12 @@ test.runIf(run)("worker path on a real cluster: env, workspace, agent, sleep, wa
   const ws = await workspaces.create({ taskId, repo, branch: `factory/${taskId}`, image: null });
   try {
     for (const file of await environment.credentialsForWorkspace()) await ws.writeFile(file.path, file.content);
+    // Secrets listed in ENV_COPY_SECRETS are in the task namespace, readable by the agent.
+    for (const item of (env.ENV_COPY_SECRETS ?? "").split(",").filter((v) => v.trim() !== "")) {
+      const name = item.trim().split("/")[1] ?? "";
+      const copied = await ws.exec(["kubectl", "--kubeconfig", "/work/home/.kube/config", "get", "secret", name, "-o", "name"]);
+      expect(copied.stdout.trim(), copied.stderr).toBe(`secret/${name}`);
+    }
     const skill = await ws.exec(["cat", "/work/home/.claude/skills/factory-environment/SKILL.md"]);
     expect(skill.stdout).toContain(environment.name);
 
