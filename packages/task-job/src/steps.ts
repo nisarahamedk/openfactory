@@ -156,9 +156,11 @@ async function billedUsage(deps: JobDeps, taskId: TaskId, reported: { inputToken
   try {
     const total = await deps.modelKeys.spend(taskId);
     if (total === null) return reported;
-    const earlier = (await deps.ledger.events(taskId))
-      .filter((e) => e.type === "turn_finished")
-      .reduce((sum, e) => sum + ((e.data as { usage?: { costUsd?: number } }).usage?.costUsd ?? 0), 0);
+    const earlier = (await deps.ledger.events(taskId)).reduce((sum, e) => {
+      if (e.type === "turn_finished") return sum + ((e.data as { usage?: { costUsd?: number } }).usage?.costUsd ?? 0);
+      if (e.type === "cost_adjusted") return sum + ((e.data as { deltaUsd?: number }).deltaUsd ?? 0);
+      return sum;
+    }, 0);
     return { ...reported, costUsd: Math.max(0, Math.round((total - earlier) * 1e6) / 1e6) };
   } catch (e) {
     deps.log("gateway spend failed", { taskId, error: describeError(e) });
@@ -342,7 +344,7 @@ export async function reviewGate(deps: JobDeps, taskId: TaskId, summary: string,
   if (nudges < deps.config.maxNudges)
     return {
       kind: "nudge",
-      prompt: `The factory can't send this to review yet: ${ready.reason}\nCommit and push branch \`${branchFor(deps, record)}\`, open the pull request if it isn't open yet, run the e2e tests against your environment, and write evidence for your HEAD commit to $HOME/evidence/manifest.json as described in your instructions. Then stop.`,
+      prompt: `The factory can't send this to review yet: ${ready.reason}\nCommit and push branch \`${branchFor(deps, record)}\`, open the pull request if it isn't open yet, run the e2e tests against your environment, and write evidence for your HEAD commit to $HOME/evidence/manifest.json as described in your instructions. If your environment is still starting, wait for it in the foreground (poll its URL for up to 10 minutes); do not end the turn until the evidence is written.`,
     };
   return { kind: "give_up", reason: ready.reason };
 }
@@ -364,8 +366,31 @@ export async function fail(deps: JobDeps, taskId: TaskId, stage: string, message
   if (target) await deps.chat.post(target, `The factory stopped this task at **${stage}**: ${message.slice(0, 1000)}\n\nComment again to retry.`).catch(() => {});
 }
 
+/**
+ * Make the record's agent cost equal what the gateway billed the task key. Turn costs are read right after
+ * each turn, and gateways book spend late (LiteLLM batches writes), so this runs again whenever the task
+ * settles. Never throws.
+ */
+export async function reconcileCost(deps: JobDeps, taskId: TaskId): Promise<void> {
+  if (!deps.modelKeys?.spend) return;
+  try {
+    const gateway = await deps.modelKeys.spend(taskId);
+    if (gateway === null) return;
+    const recorded = (await deps.ledger.events(taskId)).reduce((sum, e) => {
+      if (e.type === "turn_finished") return sum + ((e.data as { usage?: { costUsd?: number } }).usage?.costUsd ?? 0);
+      if (e.type === "cost_adjusted") return sum + ((e.data as { deltaUsd?: number }).deltaUsd ?? 0);
+      return sum;
+    }, 0);
+    const deltaUsd = Math.round((gateway - recorded) * 1e6) / 1e6;
+    if (Math.abs(deltaUsd) >= 0.0001) await deps.ledger.append(taskId, "cost_adjusted", { deltaUsd, gatewayUsd: gateway });
+  } catch (e) {
+    deps.log("cost reconcile failed", { taskId, error: describeError(e) });
+  }
+}
+
 /** Score the record and push it to every metrics sink. Never throws. */
 export async function scoreAndExport(deps: JobDeps, taskId: TaskId): Promise<void> {
+  await reconcileCost(deps, taskId);
   try {
     const record = await mustTask(deps, taskId);
     const events = await deps.ledger.events(taskId);

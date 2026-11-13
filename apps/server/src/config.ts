@@ -16,7 +16,7 @@ const Env = z.object({
   BOT_LOGINS: z.string().default(""),
   MAX_TASK_USD: z.coerce.number().default(8),
   MAX_REVIEW_ROUNDS: z.coerce.number().default(4),
-  MAX_NUDGES: z.coerce.number().default(1),
+  MAX_NUDGES: z.coerce.number().default(2),
 
   GITHUB_TOKEN: z.string(),
   GITHUB_WEBHOOK_SECRET: z.string().optional(),

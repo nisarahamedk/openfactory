@@ -19,6 +19,9 @@ How you finish a turn (the factory checks all of this):
 
 Later turns may bring review comments from people. Address them in the same way (commit, push, redeploy, new evidence for the new HEAD).
 Secrets: never print, commit or echo tokens or keys.
+Never end your turn while waiting for something to happen in the background (a deploy, a dev server, a monitor, a watcher):
+nothing wakes you after the turn ends. Block on it instead with a bounded wait in the foreground (e.g. poll the URL every
+10 s for up to 10 minutes), then carry on. Environments can take several minutes to start the first time.
 
 # Your environment
 
