@@ -139,6 +139,7 @@ export async function runTurn(
     cwd: ws.repoPath,
     systemPrompt: systemPrompt(record, branchFor(deps, record), skill, deps.config.baseBranch),
     resumeSessionId: record.harnessSessionId,
+    model: record.harness.model,
     env: {
       ...(await env.envVars()),
       ...deps.config.agentEnv,

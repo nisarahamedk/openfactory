@@ -23,18 +23,19 @@ export interface ClaudeCodeOptions {
   log: (line: string) => void;
 }
 
+// Claude Code's background calls (titles, summaries) use the small model; subagents use their own setting.
+const modelEnv = (model: string) => ({ ANTHROPIC_MODEL: model, ANTHROPIC_SMALL_FAST_MODEL: model, CLAUDE_CODE_SUBAGENT_MODEL: model });
+
 export function claudeCodeHarness(options: ClaudeCodeOptions): AcpHarness {
   return new AcpHarness({
     name: "claude-code",
     model: options.model,
     command: options.command ?? ["claude-agent-acp"],
+    modelEnv,
     env: {
       ANTHROPIC_BASE_URL: options.modelProxyUrl,
       ANTHROPIC_API_KEY: options.modelProxyKey,
-      ANTHROPIC_MODEL: options.model,
-      // Claude Code's background calls (titles, summaries) use the small model.
-      ANTHROPIC_SMALL_FAST_MODEL: options.model,
-      CLAUDE_CODE_SUBAGENT_MODEL: options.model,
+      ...modelEnv(options.model),
       ...(options.configDir === null ? {} : { CLAUDE_CONFIG_DIR: options.configDir }),
       // The workspace is the sandbox; this lets bypassPermissions run as root.
       IS_SANDBOX: "1",

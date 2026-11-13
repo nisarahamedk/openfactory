@@ -118,8 +118,14 @@ type IssueEvent = {
   actor: GhUser | null;
   label?: { name: string };
   commit_id?: string | null;
-  issue: { number: number; title: string; body: string | null; pull_request?: unknown };
+  issue: { number: number; title: string; body: string | null; pull_request?: unknown; labels?: unknown };
 };
+
+/** Label names from an issue's `labels` (objects with `name`, or plain strings). */
+function labelNames(labels: unknown): string[] {
+  if (!Array.isArray(labels)) return [];
+  return labels.flatMap((l) => (typeof l === "string" ? [l] : l && typeof l === "object" && typeof (l as { name?: unknown }).name === "string" ? [(l as { name: string }).name] : []));
+}
 type IssueComment = { id: number; body: string; created_at: string; updated_at: string; user: GhUser; issue_url: string };
 type ReviewComment = { id: number; body: string; created_at: string; user: GhUser; path: string | null; pull_request_url: string };
 
@@ -134,7 +140,7 @@ export function signalsFromPoll(
   for (const e of input.events) {
     const base = { id: `gh-event:${e.id}`, repo, at: e.created_at, actor: actor(e.actor) };
     if (e.event === "labeled" && e.label && !e.issue.pull_request)
-      out.push({ ...base, type: "issue_labeled", issueNumber: e.issue.number, label: e.label.name, title: e.issue.title, body: e.issue.body ?? "" });
+      out.push({ ...base, type: "issue_labeled", issueNumber: e.issue.number, label: e.label.name, title: e.issue.title, body: e.issue.body ?? "", labels: labelNames(e.issue.labels) });
     else if (e.event === "merged" && e.issue.pull_request)
       out.push({ ...base, type: "pr_merged", prNumber: e.issue.number, mergeSha: e.commit_id ?? "" });
     else if (e.event === "closed" && e.issue.pull_request && !e.commit_id) out.push({ ...base, type: "pr_closed", prNumber: e.issue.number });
@@ -239,7 +245,7 @@ export async function parseWebhook(
   const base = { id: `gh-delivery:${headers.delivery}`, repo, at: new Date().toISOString(), actor: actor(p.sender) };
   let s: unknown = null;
   if (headers.event === "issues" && p.action === "labeled" && !p.issue.pull_request)
-    s = { ...base, type: "issue_labeled", issueNumber: p.issue.number, label: p.label.name, title: p.issue.title, body: p.issue.body ?? "" };
+    s = { ...base, type: "issue_labeled", issueNumber: p.issue.number, label: p.label.name, title: p.issue.title, body: p.issue.body ?? "", labels: labelNames(p.issue.labels) };
   else if (headers.event === "issue_comment" && p.action === "created")
     s = { ...base, id: `gh-comment:${p.comment.id}`, type: "issue_comment", issueNumber: p.issue.number, body: p.comment.body ?? "" };
   else if (headers.event === "pull_request_review_comment" && p.action === "created")

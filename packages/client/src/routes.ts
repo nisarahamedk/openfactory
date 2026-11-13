@@ -13,6 +13,11 @@ export const FactoryInfo = z
     providers: z.record(z.string(), z.object({ name: z.string(), options: z.record(z.string(), z.unknown()) })),
     agent: z.object({ name: z.string(), model: z.string() }),
     foreman: z.object({ model: z.string() }),
+    modelRouting: z
+      .object({ default: z.string(), routes: z.array(z.object({ model: z.string(), labels: z.array(z.string()).optional(), keywords: z.array(z.string()).optional() })) })
+      .nullable()
+      .optional()
+      .meta({ description: "Which worker model a new task gets; a model:<name> label always wins" }),
     rules: z.object({ label: z.string(), maxTaskUsd: z.number(), maxReviewRounds: z.number(), maxNudges: z.number() }),
     prompts: z.object({ system: z.string(), intake: z.string(), review: z.string(), foreman: z.string() }),
   })

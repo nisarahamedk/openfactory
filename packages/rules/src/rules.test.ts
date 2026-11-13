@@ -1,6 +1,6 @@
 import type { Signal, TaskRecord } from "@openfactory/contracts";
 import { describe, expect, it } from "vitest";
-import { canMove, decide, readyForReview } from "./index.js";
+import { canMove, decide, pickModel, readyForReview } from "./index.js";
 
 const repo = { host: "github" as const, owner: "a", name: "b" };
 const cfg = { label: "factory", botLogins: ["factory-bot"], maxTaskUsd: 5, maxReviewRounds: 3 };
@@ -78,5 +78,18 @@ describe("canMove", () => {
     expect(canMove("received", "preparing")).toBe(true);
     expect(canMove("awaiting_review", "iterating")).toBe(true);
     expect(canMove("merged", "working")).toBe(false);
+  });
+});
+
+describe("pickModel", () => {
+  const routing = { default: "claude-sonnet", routes: [{ model: "claude-haiku", labels: ["ui", "test"], keywords: ["typo"] }] };
+  it("routes small UI and test work to the cheap model", () => {
+    expect(pickModel({ title: "Pricing FAQ links", labels: ["factory", "UI"] }, routing)).toEqual({ model: "claude-haiku", reason: "label ui" });
+    expect(pickModel({ title: "Fix typo on pricing", labels: ["factory"] }, routing).model).toBe("claude-haiku");
+    expect(pickModel({ title: "Typography refresh", labels: ["factory"] }, routing).model).toBe("claude-sonnet");
+  });
+  it("keeps the default for everything else, and a model: label always wins", () => {
+    expect(pickModel({ title: "Billing proration", labels: ["factory"] }, routing)).toEqual({ model: "claude-sonnet", reason: "default" });
+    expect(pickModel({ title: "x", labels: ["ui", "model:claude-sonnet"] }, routing).model).toBe("claude-sonnet");
   });
 });

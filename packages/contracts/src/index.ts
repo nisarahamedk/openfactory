@@ -141,6 +141,8 @@ export const Signal = z.discriminatedUnion("type", [
     label: z.string(),
     title: z.string(),
     body: z.string(),
+    /** Every label on the issue when it was labelled (used for model routing). */
+    labels: z.array(z.string()).optional(),
   }),
   SignalBase.extend({ type: z.literal("issue_comment"), issueNumber: z.number().int(), body: z.string() }),
   SignalBase.extend({
@@ -226,6 +228,8 @@ export interface AgentHarness {
     resumeSessionId: string | null;
     /** Extra environment for the agent process (environment handle vars, model proxy URL...). */
     env?: Record<string, string>;
+    /** The task's model, when it differs from the harness default (model routing). */
+    model?: string;
   }): Promise<AgentSession>;
 }
 

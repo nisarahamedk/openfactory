@@ -11,7 +11,7 @@ import { createRegistry, defineExtension, Harness, type Conversation, type TaskI
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { Signal, TaskId, TaskRecord } from "@openfactory/contracts";
 import { askForeman, FOREMAN_INSTRUCTIONS } from "@openfactory/foreman";
-import { decide, isTerminal, type Action } from "@openfactory/rules";
+import { decide, isTerminal, pickModel, type Action, type ModelRouting } from "@openfactory/rules";
 import { issueTarget, type JobDeps } from "./deps.js";
 import { scoreAndExport, sleepAll } from "./steps.js";
 import { jobTasks, type JobTasks } from "./tasks.js";
@@ -22,6 +22,8 @@ export type TaskJobsOptions = {
   foremanModel: { provider: string; modelId: string };
   factoryVersion: () => string;
   harnessInfo: { name: string; model: string };
+  /** Which worker model a new task gets (factory.yaml `models:`). Null: always harnessInfo.model. */
+  modelRouting?: ModelRouting | null;
 };
 
 type Open = { h: Harness; root: Conversation };
@@ -129,6 +131,10 @@ export class TaskJobs {
         return action;
       case "start_task": {
         if (signal.type !== "issue_labeled") return action;
+        const routed = this.opts.modelRouting
+          ? pickModel({ title: signal.title, labels: signal.labels ?? [signal.label] }, this.opts.modelRouting)
+          : { model: this.opts.harnessInfo.model, reason: "default" };
+        this.deps.log("model routed", { issue: signal.issueNumber, model: routed.model, reason: routed.reason });
         const { record, appended } = await l.createTask({
           id: newTaskId(),
           factoryVersion: this.opts.factoryVersion(),
@@ -140,7 +146,7 @@ export class TaskJobs {
           },
           title: signal.title,
           ask: signal.body,
-          harness: this.opts.harnessInfo,
+          harness: { name: this.opts.harnessInfo.name, model: routed.model },
           dedupeKey: `signal:${signal.id}`,
           at: signal.at,
         });

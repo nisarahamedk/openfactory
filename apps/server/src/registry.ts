@@ -24,6 +24,7 @@ import {
   type EnvironmentHandle,
   type Provider,
 } from "@openfactory/contracts";
+import type { ModelRouting } from "@openfactory/rules";
 import { parse } from "yaml";
 import { z } from "zod";
 
@@ -59,6 +60,42 @@ export function parseFactoryFile(text: string): Selections {
     }
   }
   return out;
+}
+
+const ModelRoutingFile = z.object({
+  models: z
+    .object({
+      default: z.string().min(1),
+      routes: z
+        .array(z.object({ model: z.string().min(1), labels: z.array(z.string()).optional(), keywords: z.array(z.string()).optional() }))
+        .default([]),
+    })
+    .optional(),
+}).passthrough();
+
+const list = (v: string | undefined, fallback: string) => (v ?? fallback).split(",").map((s) => s.trim()).filter(Boolean);
+
+/**
+ * Which worker model a new task gets. factory.yaml:
+ *
+ *   models:
+ *     default: claude-sonnet
+ *     routes:
+ *       - { model: claude-haiku, labels: [ui, small, test, demo, docs] }
+ *
+ * Without a `models:` block: default WORKER_MODEL; issues labelled CHEAP_LABELS (default ui, small, test, demo, docs)
+ * go to CHEAP_MODEL (default claude-haiku). A `model:<name>` label always wins. MODEL_ROUTING=off disables routing.
+ */
+export function loadModelRouting(env: Record<string, string | undefined>, path?: string): ModelRouting | null {
+  if (env.MODEL_ROUTING === "off") return null;
+  if (path && existsSync(path)) {
+    const m = ModelRoutingFile.parse(parse(readFileSync(path, "utf8")) ?? {}).models;
+    if (m) return { default: m.default, routes: m.routes };
+  }
+  return {
+    default: env.WORKER_MODEL ?? "claude-sonnet",
+    routes: [{ model: env.CHEAP_MODEL ?? "claude-haiku", labels: list(env.CHEAP_LABELS, "ui,small,test,demo,docs") }],
+  };
 }
 
 /** The pre-factory.yaml configuration, from env vars. */
