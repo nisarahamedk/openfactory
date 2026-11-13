@@ -191,7 +191,16 @@ export class Ledger implements LedgerReader {
       .from(tasks)
       .where(and(eq(tasks.repo, repoKey(repo)), eq(tasks.prNumber, prNumber)))
       .limit(1);
-    return rows[0]?.record ?? null;
+    if (rows[0]) return rows[0].record;
+    // A PR in another repo of a multi-repo task.
+    const probe = JSON.stringify([{ repo: { owner: repo.owner, name: repo.name }, pr: { number: prNumber } }]);
+    const other = await this.db
+      .select()
+      .from(tasks)
+      .where(sql`${tasks.record}->'repos' @> ${probe}::jsonb`)
+      .orderBy(desc(tasks.createdAt))
+      .limit(1);
+    return other[0]?.record ?? null;
   }
 
   async findByHeadSha(repo: RepoRef, sha: string): Promise<TaskRecord | null> {
@@ -200,7 +209,10 @@ export class Ledger implements LedgerReader {
       .from(tasks)
       .where(and(eq(tasks.repo, repoKey(repo)), sql`${tasks.record}->'pr'->>'headSha' = ${sha}`))
       .limit(1);
-    return rows[0]?.record ?? null;
+    if (rows[0]) return rows[0].record;
+    const probe = JSON.stringify([{ repo: { owner: repo.owner, name: repo.name }, pr: { headSha: sha } }]);
+    const other = await this.db.select().from(tasks).where(sql`${tasks.record}->'repos' @> ${probe}::jsonb`).limit(1);
+    return other[0]?.record ?? null;
   }
 
   /** Was this delivery already recorded on any task? */

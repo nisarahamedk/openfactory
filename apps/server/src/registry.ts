@@ -24,7 +24,7 @@ import {
   type EnvironmentHandle,
   type Provider,
 } from "@openfactory/contracts";
-import type { ModelRouting } from "@openfactory/rules";
+import { DEFAULT_RISK, type ModelRouting, type RiskConfig, type Rollout } from "@openfactory/rules";
 import { parse } from "yaml";
 import { z } from "zod";
 
@@ -136,6 +136,52 @@ export function loadOutcomeConfig(env: Record<string, string | undefined>, path?
     sources: file?.sources ? file.sources.map(toSelection) : defaults,
     windowDays: file?.windowDays ?? Number(env.OUTCOME_WINDOW_DAYS ?? 30),
     intervalMs: file?.intervalMs ?? Number(env.OUTCOME_INTERVAL_MS ?? 600_000),
+  };
+}
+
+const Routing = z.object({
+  default: z.string().min(1),
+  routes: z.array(z.object({ model: z.string().min(1), labels: z.array(z.string()).optional(), keywords: z.array(z.string()).optional() })).default([]),
+});
+const ExtrasFile = z
+  .object({
+    /** A candidate factory version for a share of new tasks. */
+    rollout: z.object({ candidate: z.string().min(1).nullable().default(null), share: z.number().min(0).max(1).default(0) }).optional(),
+    /** How each version differs: extra prompt text, other model routing. */
+    versions: z.record(z.string(), z.object({ prompt: z.string().optional(), models: Routing.optional() })).default({}),
+    /** Merge-risk rules. */
+    risk: z.object({ riskyPaths: z.array(z.string()).optional(), mediumLines: z.number().optional(), highLines: z.number().optional() }).optional(),
+  })
+  .passthrough();
+
+export type FactoryExtras = {
+  rollout: Rollout | null;
+  versionPrompts: Record<string, string>;
+  versionModels: Record<string, ModelRouting>;
+  risk: RiskConfig;
+};
+
+/**
+ * factory.yaml blocks beyond providers and models:
+ *
+ *   rollout: { candidate: "2026-11-14.1", share: 0.1 }
+ *   versions:
+ *     "2026-11-14.1": { prompt: "Write the e2e test before the code.", models: { default: claude-sonnet, routes: [] } }
+ *   risk: { riskyPaths: ["(^|/)migrations/"], mediumLines: 200, highLines: 800 }
+ */
+export function loadFactoryExtras(stableVersion: string, path?: string): FactoryExtras {
+  const doc = path && existsSync(path) ? ExtrasFile.parse(parse(readFileSync(path, "utf8")) ?? {}) : ExtrasFile.parse({});
+  const versionPrompts: Record<string, string> = {};
+  const versionModels: Record<string, ModelRouting> = {};
+  for (const [v, spec] of Object.entries(doc.versions)) {
+    if (spec.prompt) versionPrompts[v] = spec.prompt;
+    if (spec.models) versionModels[v] = spec.models;
+  }
+  return {
+    rollout: doc.rollout?.candidate ? { stable: stableVersion, candidate: doc.rollout.candidate, share: doc.rollout.share } : null,
+    versionPrompts,
+    versionModels,
+    risk: { ...DEFAULT_RISK, ...(doc.risk ?? {}) },
   };
 }
 

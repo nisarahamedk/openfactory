@@ -17,7 +17,7 @@ import { fileEvidenceStore, createApp } from "./app.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
 import { cachedDirectory, configDirectory, factoryViews, loadOrgConfig } from "./org.js";
-import { loadModelRouting, loadOutcomeConfig, loadSelections, ProviderRegistry } from "./registry.js";
+import { loadFactoryExtras, loadModelRouting, loadOutcomeConfig, loadSelections, ProviderRegistry } from "./registry.js";
 
 const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), msg, ...fields }));
 
@@ -54,6 +54,8 @@ async function main() {
   const agent = need(p.agent, "agent");
   const modelRouting = loadModelRouting(pluginEnv, cfg.FACTORY_FILE);
   log("model routing", { routing: modelRouting });
+  const extras = loadFactoryExtras(cfg.FACTORY_VERSION, cfg.FACTORY_FILE);
+  log("rollout", { rollout: extras.rollout });
   const workspace = need(p.workspace, "workspace");
   const environment = need(p.devEnvironment, "devEnvironment");
   const forge = need(p.codeForge, "codeForge");
@@ -93,7 +95,7 @@ async function main() {
         : null,
       scorers: factScorers,
       sinks,
-      config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/" },
+      config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/", risk: extras.risk, versionPrompts: extras.versionPrompts },
       log,
   };
   const jobs = new TaskJobs(
@@ -105,6 +107,14 @@ async function main() {
       factoryVersion: () => cfg.FACTORY_VERSION,
       harnessInfo: { name: agent.name, model: agent.model },
       modelRouting,
+      // The app's rollout (Factories > Versions) overrides factory.yaml's, read per new task.
+      rollout: async () => {
+        const r = await store.rollout("default").catch(() => null);
+        if (!r) return extras.rollout;
+        return { stable: r.state.live ?? cfg.FACTORY_VERSION, candidate: r.state.candidate, share: r.state.share };
+      },
+      versionModels: extras.versionModels,
+      knownRepos: cfg.repos,
     },
   );
   log("resumed tasks", { count: await jobs.resumeAll() });
@@ -183,6 +193,7 @@ async function main() {
     agent: { name: agent.name, model: agent.model },
     foreman: { model: cfg.FOREMAN_MODEL },
     modelRouting,
+    rollout: extras.rollout,
     rules: { label: cfg.FACTORY_LABEL, maxTaskUsd: cfg.MAX_TASK_USD, maxReviewRounds: cfg.MAX_REVIEW_ROUNDS, maxNudges: cfg.MAX_NUDGES },
     prompts: { ...promptTemplates(cfg.BASE_BRANCH), foreman: FOREMAN_INSTRUCTIONS },
   });

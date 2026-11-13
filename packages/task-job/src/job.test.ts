@@ -188,6 +188,7 @@ describe("task job", () => {
     expect(w.envs[0]?.GH_TOKEN).toBe("t");
     expect(w.envs[0]?.MODEL).toBe("cheap");
     expect(r.harness.model).toBe("cheap");
+    expect(r.risk?.level).toBe("low"); // small, evidence for head, no sensitive paths
     expect(w.envs[0]?.ANTHROPIC_API_KEY).toBe(`key-${taskId}`);
 
     // A question in the issue goes to the foreman, not the worker.

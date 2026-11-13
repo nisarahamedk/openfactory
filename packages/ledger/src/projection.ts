@@ -5,13 +5,14 @@
  */
 import {
   Evidence,
+  MergeRisk,
+  RepoRef,
   Outcome,
   Score,
   TaskStatus,
   Usage,
   WorldCheckResult,
   type LedgerEvent,
-  type RepoRef,
   type TaskId,
   type TaskRecord,
 } from "@openfactory/contracts";
@@ -32,9 +33,16 @@ export const EventData = {
     stopReason: z.string(),
     summary: z.string().optional(),
   }),
-  pr_opened: z.object({ number: z.number().int(), url: z.string(), headSha: z.string().nullable() }),
+  /** `repo` is set for a PR in another repo of the task's scope; without it, the primary PR. */
+  pr_opened: z.object({ number: z.number().int(), url: z.string(), headSha: z.string().nullable(), repo: RepoRef.optional() }),
+  /** The repos this task works in, primary first (planned at intake). */
+  scope_planned: z.object({ repos: z.array(RepoRef).min(1), reason: z.string() }),
+  /** Which factory version served this task while a candidate rolls out to a share of new tasks. */
+  version_routed: z.object({ version: z.string(), arm: z.enum(["stable", "candidate"]), share: z.number() }),
+  /** Merge-risk assessment of the primary PR at a head. */
+  merge_risk: MergeRisk,
   /** A new PR head. `byFactory: false` means someone else pushed between agent turns (autonomy = merged with none). */
-  pushed: z.object({ sha: z.string(), byFactory: z.boolean().optional() }),
+  pushed: z.object({ sha: z.string(), byFactory: z.boolean().optional(), repo: RepoRef.optional() }),
   /** PR size at a head (recorded when the PR opens, on each factory push, and at merge). */
   pr_stats: z.object({ headSha: z.string(), additions: z.number().int(), deletions: z.number().int(), changedFiles: z.number().int() }),
   /** One agent turn's update stream, saved as JSONL in the EvidenceStore. */
@@ -89,6 +97,9 @@ export function newRecord(input: NewTask): TaskRecord {
     workspace: null,
     branch: null,
     pr: null,
+    repos: [],
+    versionArm: null,
+    risk: null,
     usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
     people: { comments: 0, reviewRounds: 0 },
     evidence: [],
@@ -109,9 +120,26 @@ function addUsage(a: Usage, b: Usage): Usage {
   };
 }
 
+const sameRepo = (a: RepoRef, b: RepoRef) => repoKey(a) === repoKey(b);
+
+/** Keep repos[0] equal to the primary repo, branch and PR. */
+function withPrimary(r: TaskRecord): TaskRecord {
+  const rest = (r.repos ?? []).filter((x) => !sameRepo(x.repo, r.source.repo));
+  return { ...r, repos: [{ repo: r.source.repo, branch: r.branch, pr: r.pr }, ...rest] };
+}
+
+type TaskRepoT = NonNullable<TaskRecord["repos"]>[number];
+
+function setRepo(r: TaskRecord, repo: RepoRef, change: (x: TaskRepoT) => TaskRepoT): TaskRecord {
+  const cur = r.repos ?? [];
+  const repos = cur.some((x) => sameRepo(x.repo, repo)) ? cur : [...cur, { repo, branch: r.branch, pr: null }];
+  return { ...r, repos: repos.map((x) => (sameRepo(x.repo, repo) ? change(x) : x)) };
+}
+
 /** Apply one event. Unknown event types only move `updatedAt`. */
 export function apply(record: TaskRecord, event: LedgerEvent): TaskRecord {
-  const r: TaskRecord = { ...record, updatedAt: event.at };
+  // Records written before repos/versionArm/risk existed lack them.
+  const r: TaskRecord = { ...record, repos: record.repos ?? [], versionArm: record.versionArm ?? null, risk: record.risk ?? null, updatedAt: event.at };
   const type = event.type as EventType;
   const schema = EventData[type];
   if (!schema) return r;
@@ -131,8 +159,21 @@ export function apply(record: TaskRecord, event: LedgerEvent): TaskRecord {
       const e = d as EventDataOf<"workspace_attached">;
       return { ...r, workspace: { plugin: e.plugin, id: e.id } };
     }
-    case "branch_set":
-      return { ...r, branch: (d as EventDataOf<"branch_set">).branch };
+    case "branch_set": {
+      const branch = (d as EventDataOf<"branch_set">).branch;
+      return withPrimary({ ...r, branch, repos: (r.repos ?? []).map((x) => ({ ...x, branch })) });
+    }
+    case "scope_planned": {
+      const e = d as EventDataOf<"scope_planned">;
+      const repos = e.repos.map((repo) => (r.repos ?? []).find((x) => sameRepo(x.repo, repo)) ?? { repo, branch: r.branch, pr: null });
+      return withPrimary({ ...r, repos });
+    }
+    case "version_routed": {
+      const e = d as EventDataOf<"version_routed">;
+      return { ...r, factoryVersion: e.version, versionArm: e.arm };
+    }
+    case "merge_risk":
+      return { ...r, risk: d as EventDataOf<"merge_risk"> };
     case "cost_adjusted":
       return { ...r, usage: addUsage(r.usage, { inputTokens: 0, outputTokens: 0, costUsd: (d as EventDataOf<"cost_adjusted">).deltaUsd }) };
     case "turn_finished":
@@ -143,10 +184,15 @@ export function apply(record: TaskRecord, event: LedgerEvent): TaskRecord {
     }
     case "pr_opened": {
       const e = d as EventDataOf<"pr_opened">;
-      return { ...r, pr: { number: e.number, url: e.url, headSha: e.headSha } };
+      const pr = { number: e.number, url: e.url, headSha: e.headSha };
+      if (e.repo && !sameRepo(e.repo, r.source.repo)) return setRepo(r, e.repo, (x) => ({ ...x, pr }));
+      return withPrimary({ ...r, pr });
     }
-    case "pushed":
-      return r.pr ? { ...r, pr: { ...r.pr, headSha: (d as EventDataOf<"pushed">).sha } } : r;
+    case "pushed": {
+      const e = d as EventDataOf<"pushed">;
+      if (e.repo && !sameRepo(e.repo, r.source.repo)) return setRepo(r, e.repo, (x) => (x.pr ? { ...x, pr: { ...x.pr, headSha: e.sha } } : x));
+      return r.pr ? withPrimary({ ...r, pr: { ...r.pr, headSha: e.sha } }) : r;
+    }
     case "evidence_added":
       return { ...r, evidence: [...r.evidence, (d as EventDataOf<"evidence_added">).evidence] };
     case "comment_received":

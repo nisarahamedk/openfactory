@@ -97,3 +97,30 @@ describe("pickModel", () => {
     expect(pickModel({ title: "x", labels: ["ui", "model:claude-sonnet"] }, routing).model).toBe("claude-sonnet");
   });
 });
+
+describe("pickVersion, mergeRisk, planScope", async () => {
+  const { pickVersion, mergeRisk, planScope } = await import("./index.js");
+  it("routes about the candidate share, deterministically", () => {
+    const r = { stable: "v1", candidate: "v2", share: 0.1 };
+    const arms = Array.from({ length: 2000 }, (_, i) => pickVersion(`sig-${i}`, r).arm);
+    const share = arms.filter((a) => a === "candidate").length / arms.length;
+    expect(share).toBeGreaterThan(0.07);
+    expect(share).toBeLessThan(0.13);
+    expect(pickVersion("x", r)).toEqual(pickVersion("x", r));
+    expect(pickVersion("x", { ...r, candidate: null }).arm).toBe("stable");
+  });
+  it("labels risk from size, paths, CI and evidence", () => {
+    const base = { headSha: "h", additions: 40, deletions: 5, files: ["src/components/site/Faq.tsx"], ci: ["success"], evidenceForHead: true, reviewRounds: 0 };
+    expect(mergeRisk(base).level).toBe("low");
+    expect(mergeRisk({ ...base, files: ["drizzle/0012_add.sql"] }).level).toBe("medium");
+    expect(mergeRisk({ ...base, files: ["drizzle/0012_add.sql"], ci: ["failure"] }).level).toBe("high");
+    expect(mergeRisk({ ...base, evidenceForHead: false }).reasons).toContain("no evidence for this head");
+  });
+  it("adds repos the issue names", () => {
+    const p = { owner: "acme", name: "app" };
+    const known = [p, { owner: "acme", name: "api" }, { owner: "acme", name: "apix" }];
+    expect(planScope(p, { title: "x", body: "also change acme/api", labels: [] }, known).repos.map((r) => r.name)).toEqual(["app", "api"]);
+    expect(planScope(p, { title: "x", body: "", labels: ["repo:apix"] }, known).repos.map((r) => r.name)).toEqual(["app", "apix"]);
+    expect(planScope(p, { title: "x", body: "nothing", labels: [] }, known).repos).toHaveLength(1);
+  });
+});

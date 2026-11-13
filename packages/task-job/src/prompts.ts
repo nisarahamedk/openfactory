@@ -1,7 +1,27 @@
 import type { TaskRecord } from "@openfactory/contracts";
 
 /** The worker's standing instructions. The environment's skill file says how to deploy and test there. */
-export function systemPrompt(record: TaskRecord, branch: string, envSkill: string, baseBranch: string): string {
+export type PromptExtras = {
+  /** The task's other repos and where they are checked out (one PR per repo). */
+  otherRepos?: { name: string; path: string }[];
+  /** How this factory version differs (rollout candidates). */
+  versionNote?: string;
+};
+
+function scopeSection(extras: PromptExtras, branch: string, baseBranch: string): string {
+  const others = extras.otherRepos ?? [];
+  if (!others.length) return "";
+  return `
+
+# Other repos in this task
+This task spans several repos. Besides this checkout, these are cloned for you on branch \`${branch}\`:
+${others.map((o) => `- ${o.name} at ${o.path}`).join("\n")}
+Change only the repos the task needs. In each repo you change: commit, push \`${branch}\`, and open its own PR with
+\`gh pr create --repo <owner/name> --base ${baseBranch} --head ${branch}\`. Link the PRs to each other in their bodies,
+and say in which order they must merge. Evidence may name its repo with "repo": "<owner/name>".`;
+}
+
+export function systemPrompt(record: TaskRecord, branch: string, envSkill: string, baseBranch: string, extras: PromptExtras = {}): string {
   return `You are a software engineer working for a software factory on one task: "${record.title}".
 You work in this checkout on branch \`${branch}\` (based on \`${baseBranch}\`). Work like a careful senior engineer.
 
@@ -15,6 +35,9 @@ How you finish a turn (the factory checks all of this):
    Put the files in $HOME/evidence/ and list them in $HOME/evidence/manifest.json as a JSON array of
    {"kind": "screenshot"|"video"|"test-output"|"log", "title": "...", "file": "<file name in $HOME/evidence>", "commitSha": "<full HEAD sha>", "environment": "<environment name>"}.
    Keep earlier entries; add new ones for each new commit.
+   When the feature depends on who is signed in or on account state, also set up a test user in that state in your
+   environment and add it as {"kind": "test-user", "title": "...", "testUser": {"role": "...", "state": "...", "loginUrl": "<a sign-in link to your environment>"}, "commitSha": "...", "environment": "..."}
+   so the reviewer can log in and see it. Only ever in your own environment, never production.
 5. End with a short summary for the reviewer: what changed, how you tested it, anything risky.
 
 Later turns may bring review comments from people. Address them in the same way (commit, push, redeploy, new evidence for the new HEAD).
@@ -25,7 +48,7 @@ nothing wakes you after the turn ends. Block on it instead with a bounded wait i
 
 # Your environment
 
-${envSkill}`;
+${envSkill}${scopeSection(extras, branch, baseBranch)}${extras.versionNote ? `\n\n# This factory version\n${extras.versionNote}` : ""}`;
 }
 
 /** The prompts with placeholders instead of a task, for GET /v1/factory (what this factory version tells the agent). */

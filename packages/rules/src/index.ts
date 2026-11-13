@@ -163,3 +163,130 @@ export function pickModel(
   }
   return { model: routing.default, reason: "default" };
 }
+
+// ───────────────────────────── factory version rollout ─────────────────────────────
+
+export type Rollout = {
+  stable: string;
+  /** null: no candidate rolling out. */
+  candidate: string | null;
+  /** Share of new tasks (0..1) that get the candidate. */
+  share: number;
+};
+
+/** Stable hash of a string to [0, 1), so a task's arm is reproducible from its signal id. */
+export function unitHash(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) / 2 ** 32;
+}
+
+/** Which factory version serves a new task. Deterministic per key (the signal id). */
+export function pickVersion(key: string, rollout: Rollout): { version: string; arm: "stable" | "candidate" } {
+  if (rollout.candidate && rollout.share > 0 && unitHash(key) < rollout.share) return { version: rollout.candidate, arm: "candidate" };
+  return { version: rollout.stable, arm: "stable" };
+}
+
+// ───────────────────────────── merge risk ─────────────────────────────
+
+export type RiskConfig = {
+  /** Path patterns (regex source) that make a change riskier: migrations, auth, billing, CI, infra... */
+  riskyPaths: string[];
+  /** Lines changed above which a PR is medium / high risk. */
+  mediumLines: number;
+  highLines: number;
+};
+
+export const DEFAULT_RISK: RiskConfig = {
+  riskyPaths: [
+    "(^|/)migrations?/",
+    "(^|/)drizzle/",
+    "\\.sql$",
+    "(^|/)(auth|session|permissions?)[/.]",
+    "(billing|payment|stripe|invoice)",
+    "^\\.github/workflows/",
+    "^(infra|deploy|terraform)/",
+    "(^|/)(package\\.json|pnpm-lock\\.yaml|package-lock\\.json)$",
+    "(^|/)wrangler\\.(toml|jsonc?)$",
+  ],
+  mediumLines: 200,
+  highLines: 800,
+};
+
+export type RiskInput = {
+  headSha: string;
+  additions: number;
+  deletions: number;
+  files: string[];
+  /** Latest CI conclusions for the head (empty: unknown). */
+  ci: string[];
+  evidenceForHead: boolean;
+  reviewRounds: number;
+};
+
+/**
+ * Merge risk for a PR head, from facts a reviewer would weigh: size, sensitive paths, CI, evidence and churn.
+ * Pure, so the same facts always give the same label; the reasons are shown on the PR.
+ */
+export function mergeRisk(input: RiskInput, cfg: RiskConfig = DEFAULT_RISK): { level: "low" | "medium" | "high"; reasons: string[]; headSha: string } {
+  const reasons: string[] = [];
+  let score = 0;
+  const lines = input.additions + input.deletions;
+  if (lines >= cfg.highLines) {
+    score += 2;
+    reasons.push(`${lines} lines changed`);
+  } else if (lines >= cfg.mediumLines) {
+    score += 1;
+    reasons.push(`${lines} lines changed`);
+  }
+  const patterns = cfg.riskyPaths.map((p) => new RegExp(p, "i"));
+  const risky = input.files.filter((f) => patterns.some((p) => p.test(f)));
+  if (risky.length) {
+    score += 2;
+    reasons.push(`touches ${risky.slice(0, 3).join(", ")}${risky.length > 3 ? ` and ${risky.length - 3} more` : ""}`);
+  }
+  if (input.ci.some((c) => c === "failure" || c === "timed_out")) {
+    score += 2;
+    reasons.push("CI failing on this head");
+  }
+  if (!input.evidenceForHead) {
+    score += 1;
+    reasons.push("no evidence for this head");
+  }
+  if (input.reviewRounds >= 3) {
+    score += 1;
+    reasons.push(`${input.reviewRounds} review rounds`);
+  }
+  const level = score >= 3 ? "high" : score >= 1 ? "medium" : "low";
+  if (level === "low") reasons.push(`${lines} lines, no sensitive paths, evidence for head`);
+  return { level, reasons, headSha: input.headSha };
+}
+
+// ───────────────────────────── scope ─────────────────────────────
+
+export type RepoName = { owner: string; name: string };
+
+/**
+ * The repos a new task works in: its own repo first, plus any other factory repo the issue names
+ * (`owner/name` in the text, or a `repo:<name>` label). Deterministic; a planner can widen it later.
+ */
+export function planScope(
+  primary: RepoName,
+  issue: { title: string; body: string; labels: string[] },
+  known: RepoName[],
+): { repos: RepoName[]; reason: string } {
+  const key = (r: RepoName) => `${r.owner}/${r.name}`.toLowerCase();
+  const text = `${issue.title}\n${issue.body}`.toLowerCase();
+  const labels = issue.labels.map((l) => l.toLowerCase());
+  const extra = known.filter((r) => {
+    if (key(r) === key(primary)) return false;
+    if (labels.includes(`repo:${r.name.toLowerCase()}`) || labels.includes(`repo:${key(r)}`)) return true;
+    return new RegExp(`(^|[^\\w/.-])${key(r).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\w/.-])`).test(text);
+  });
+  return extra.length
+    ? { repos: [primary, ...extra], reason: `issue names ${extra.map(key).join(", ")}` }
+    : { repos: [primary], reason: "single repo" };
+}

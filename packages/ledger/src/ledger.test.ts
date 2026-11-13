@@ -36,6 +36,26 @@ describe("Ledger", () => {
     expect((await ledger.events("task_1")).map((e) => e.type)).toEqual(["task_created"]);
   });
 
+  it("tracks a multi-repo task, its version arm and merge risk", async () => {
+    await create();
+    const api = { host: "github" as const, owner: "acme", name: "api" };
+    await ledger.append("task_1", "branch_set", { branch: "factory/task_1" });
+    await ledger.append("task_1", "scope_planned", { repos: [repo, api], reason: "issue names acme/api" });
+    await ledger.append("task_1", "version_routed", { version: "fv_candidate", arm: "candidate", share: 0.1 });
+    await ledger.append("task_1", "pr_opened", { number: 5, url: "https://x/app/5", headSha: "a1" });
+    await ledger.append("task_1", "pr_opened", { number: 9, url: "https://x/api/9", headSha: "b1", repo: api });
+    await ledger.append("task_1", "pushed", { sha: "b2", byFactory: true, repo: api });
+    const r = (await ledger.append("task_1", "merge_risk", { level: "medium", reasons: ["touches drizzle/1.sql"], headSha: "a1" })).record;
+    expect(r.pr?.number).toBe(5);
+    expect(r.repos?.map((x) => [x.repo.name, x.branch, x.pr?.number, x.pr?.headSha])).toEqual([
+      ["app", "factory/task_1", 5, "a1"],
+      ["api", "factory/task_1", 9, "b2"],
+    ]);
+    expect([r.factoryVersion, r.versionArm, r.risk?.level]).toEqual(["fv_candidate", "candidate", "medium"]);
+    expect((await ledger.findByPr(api, 9))?.id).toBe("task_1");
+    expect((await ledger.findByHeadSha(api, "b2"))?.id).toBe("task_1");
+  });
+
   it("projects events into the record and dedupes deliveries", async () => {
     await create();
     await ledger.setStatus("task_1", "working");

@@ -18,6 +18,11 @@ export const FactoryInfo = z
       .nullable()
       .optional()
       .meta({ description: "Which worker model a new task gets; a model:<name> label always wins" }),
+    rollout: z
+      .object({ stable: z.string(), candidate: z.string().nullable(), share: z.number() })
+      .nullable()
+      .optional()
+      .meta({ description: "A candidate factory version served to a share of new tasks" }),
     rules: z.object({ label: z.string(), maxTaskUsd: z.number(), maxReviewRounds: z.number(), maxNudges: z.number() }),
     prompts: z.object({ system: z.string(), intake: z.string(), review: z.string(), foreman: z.string() }),
   })

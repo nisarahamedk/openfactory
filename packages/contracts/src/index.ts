@@ -48,13 +48,23 @@ export const TaskStatus = z.enum([
 ]);
 export type TaskStatus = z.infer<typeof TaskStatus>;
 
+/** A test user the agent left in a given state in its environment, so a reviewer can log in and see the feature. */
+export const TestUser = z.object({
+  role: z.string(), // e.g. "owner on the Pro plan"
+  state: z.string(), // e.g. "trial ends tomorrow, 3 missed calls"
+  loginUrl: z.string(), // a sign-in link into the task's (non-production) environment
+});
+export type TestUser = z.infer<typeof TestUser>;
+
 export const Evidence = z.object({
-  kind: z.enum(["screenshot", "video", "test-output", "log", "link"]),
+  kind: z.enum(["screenshot", "video", "test-output", "log", "link", "test-user"]),
   title: z.string(),
-  url: z.string(), // where a reviewer can open it
+  url: z.string(), // where a reviewer can open it (for test-user: the login link)
   commitSha: z.string(), // the commit the evidence was produced against
   environment: z.string(), // e.g. "devspace:task-12"
   createdAt: z.string(),
+  testUser: TestUser.optional(), // kind "test-user" only
+  repo: z.string().optional(), // "owner/name" when the task spans several repos
 });
 export type Evidence = z.infer<typeof Evidence>;
 
@@ -99,6 +109,20 @@ export const WorldCheckResult = z.object({
   reportUrl: z.string().nullable(),
 });
 export type WorldCheckResult = z.infer<typeof WorldCheckResult>;
+export const PrRef = z.object({ number: z.number().int(), url: z.string(), headSha: z.string().nullable() });
+export type PrRef = z.infer<typeof PrRef>;
+
+/** One repo in a task's scope. The first entry is the task's own repo (source.repo, `branch`, `pr`). */
+export const TaskRepo = z.object({ repo: RepoRef, branch: z.string().nullable(), pr: PrRef.nullable() });
+export type TaskRepo = z.infer<typeof TaskRepo>;
+
+/** How risky merging the PR at `headSha` looks, from rules over size, paths, CI and evidence. */
+export const MergeRisk = z.object({
+  level: z.enum(["low", "medium", "high"]),
+  reasons: z.array(z.string()),
+  headSha: z.string(),
+});
+export type MergeRisk = z.infer<typeof MergeRisk>;
 
 export const TaskRecord = z.object({
   id: TaskId,
@@ -117,7 +141,13 @@ export const TaskRecord = z.object({
   environment: z.object({ plugin: z.string(), name: z.string() }).nullable(),
   workspace: z.object({ plugin: z.string(), id: z.string() }).nullable(),
   branch: z.string().nullable(),
-  pr: z.object({ number: z.number().int(), url: z.string(), headSha: z.string().nullable() }).nullable(),
+  pr: PrRef.nullable(),
+  /** Every repo the task works in, primary first (one PR per repo). Older records: empty. */
+  repos: z.array(TaskRepo).optional(),
+  /** Which factory version arm served this task when a candidate version is rolling out. */
+  versionArm: z.enum(["stable", "candidate"]).nullable().optional(),
+  /** The latest merge-risk assessment of the primary PR. */
+  risk: MergeRisk.nullable().optional(),
   usage: Usage,
   people: z.object({
     comments: z.number().int().nonnegative(),
@@ -222,7 +252,12 @@ export interface CodeForge {
   /** Short-lived token the sandbox may use to push to one repo. */
   mintPushToken(repo: RepoRef): Promise<{ token: string; expiresAt: string }>;
   /** Size of a PR at its current head (optional; used for cost-per-PR-by-size). */
-  pullRequestStats?(repo: RepoRef, number: number): Promise<{ headSha: string; additions: number; deletions: number; changedFiles: number }>;
+  pullRequestStats?(
+    repo: RepoRef,
+    number: number,
+  ): Promise<{ headSha: string; additions: number; deletions: number; changedFiles: number; files?: string[] }>;
+  /** Replace the PR's labels that start with `prefix` by `labels` (optional; used for the merge-risk label). */
+  setPrefixedLabels?(repo: RepoRef, number: number, prefix: string, labels: string[]): Promise<void>;
 }
 
 export const TurnResult = z.object({
