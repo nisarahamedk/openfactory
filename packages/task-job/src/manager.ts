@@ -25,7 +25,7 @@ export type TaskJobsOptions = {
   /** Which worker model a new task gets (factory.yaml `models:`). Null: always harnessInfo.model. */
   modelRouting?: ModelRouting | null;
   /** A candidate factory version served to a share of new tasks (factory.yaml `rollout:`). */
-  rollout?: Rollout | null;
+  rollout?: Rollout | null | (() => Promise<Rollout | null>);
   /** Model routing per factory version, when a version changes it. */
   versionModels?: Record<string, ModelRouting>;
   /** Every repo the factory may work in; an issue that names one of them adds it to the task's scope. */
@@ -137,7 +137,8 @@ export class TaskJobs {
         return action;
       case "start_task": {
         if (signal.type !== "issue_labeled") return action;
-        const version = this.opts.rollout ? pickVersion(signal.id, this.opts.rollout) : { version: this.opts.factoryVersion(), arm: "stable" as const };
+        const rollout = typeof this.opts.rollout === "function" ? await this.opts.rollout() : (this.opts.rollout ?? null);
+        const version = rollout ? pickVersion(signal.id, rollout) : { version: this.opts.factoryVersion(), arm: "stable" as const };
         const routing = this.opts.versionModels?.[version.version] ?? this.opts.modelRouting;
         const labels = signal.labels ?? [signal.label];
         const routed = routing ? pickModel({ title: signal.title, labels }, routing) : { model: this.opts.harnessInfo.model, reason: "default" };
@@ -158,8 +159,7 @@ export class TaskJobs {
         });
         if (!appended) return { ...action, taskId: record.id };
         this.deps.log("model routed", { taskId: record.id, issue: signal.issueNumber, model: routed.model, reason: routed.reason });
-        if (this.opts.rollout?.candidate)
-          await l.append(record.id, "version_routed", { version: version.version, arm: version.arm, share: this.opts.rollout.share });
+        if (rollout?.candidate) await l.append(record.id, "version_routed", { version: version.version, arm: version.arm, share: rollout.share });
         const scope = planScope(signal.repo, { title: signal.title, body: signal.body, labels }, this.opts.knownRepos ?? []);
         if (scope.repos.length > 1)
           await l.append(record.id, "scope_planned", { repos: scope.repos.map((r) => ({ host: "github" as const, owner: r.owner, name: r.name })), reason: scope.reason });
