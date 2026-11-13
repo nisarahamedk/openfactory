@@ -9,10 +9,21 @@ ARG KUBECTL_VERSION=v1.34.1
 ARG DEVSPACE_VERSION=v6.3.18
 ARG CLAUDE_AGENT_ACP_VERSION=0.106.0
 ARG PNPM_VERSION=10.28.0
+ARG NODE_VERSION=22.21.1
+ARG NODE_SHA256=219a152ea859861d75adea578bdec3dce8143853c13c5187f40c40e77b0143b2
 ARG GH_VERSION=2.83.0
 ARG GH_SHA256=a5cf6cdb40fc67751adf561126b3314044779cea81ba4f254fbe8e9a69f1676f
 
-# The base image already has git, curl, ps and Node 22.
+# Node 22.21+ so Node's own fetch and https honour the egress proxy variables
+# (NODE_USE_ENV_PROXY=1, set on the pod); the base image's Node 22.20 does not.
+# /usr/local/bin comes first on PATH, ahead of the base image's /usr/bin/node.
+RUN curl -fsSLo /tmp/node.tgz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.gz" \
+ && echo "${NODE_SHA256}  /tmp/node.tgz" | sha256sum -c - \
+ && tar -xzf /tmp/node.tgz -C /usr/local --strip-components=1 --exclude='*.md' --exclude=LICENSE \
+ && rm /tmp/node.tgz \
+ && node --version | grep -qx "v${NODE_VERSION}"
+
+# The base image already has git, curl and ps.
 RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
  && chmod +x /usr/local/bin/kubectl \
  && curl -fsSLo /usr/local/bin/devspace "https://github.com/loft-sh/devspace/releases/download/${DEVSPACE_VERSION}/devspace-linux-amd64" \
