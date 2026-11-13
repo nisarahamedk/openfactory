@@ -23,7 +23,7 @@ A workspace is one pod plus one volume (PVC) in a namespace.
 - `destroy` deletes pod and PVC and waits until the PVC is gone. `get` finds only PVCs this plugin made.
 - The pod has no service account token, no service links, and an optional runtime class (gVisor).
 
-Worker image: `image/Dockerfile` (Playwright base + Node 22 + pnpm + Claude Code ACP adapter + kubectl + devspace + gh).
+Worker image: `image/Dockerfile` (Playwright 1.56.1 base and browsers, matching the product repo's pin + Node 22.21 + pnpm + Claude Code ACP adapter + kubectl + devspace + helm 3.11.1 + gh).
 
 ## Settings (`fromEnv`)
 
