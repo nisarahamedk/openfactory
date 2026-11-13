@@ -269,11 +269,14 @@ export interface EnvironmentHandle {
   destroy(): Promise<void>;
 }
 
-/** A scorer reads one task record and returns a score, or null if it doesn't apply yet. */
+/**
+ * A scorer reads one task record (plus its event log, for timing and CI facts)
+ * and returns a score, or null if it doesn't apply yet.
+ */
 export interface Scorer {
   readonly name: string;
   readonly version: string;
-  score(record: TaskRecord, now: string): Score | null;
+  score(record: TaskRecord, events: LedgerEvent[], now: string): Score | null;
 }
 
 /** Where rows go for org dashboards (fake DX, DevLake, OTel...). */

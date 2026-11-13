@@ -27,6 +27,15 @@ importers:
         specifier: 4.1.12
         version: 4.1.12
 
+  packages/scoring:
+    dependencies:
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.2':
