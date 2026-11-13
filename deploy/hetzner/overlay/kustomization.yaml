@@ -10,7 +10,7 @@ resources:
 images:
   - name: ghcr.io/nisarahamedk/openfactory
     newName: openfactory
-    newTag: a608f46
+    newTag: eee391d
 patches:
   - target: { kind: Ingress, name: factory }
     patch: |-
