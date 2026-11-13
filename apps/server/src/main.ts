@@ -1,22 +1,21 @@
 /**
  * The factory server: one process that takes signals, runs task jobs, and
- * serves the API, evidence and benchmarks. Configured only by env vars.
+ * serves the API, evidence and benchmarks. Providers come from factory.yaml
+ * (FACTORY_FILE), with env vars as the fallback.
  */
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
-import { GitHubBundlePusher, GitHubChat, GitHubClient, GitHubCodeHost, GitHubPollingSource, parseWebhook } from "@openfactory/code-github";
-import type { AgentHarness, MetricsSink, Signal } from "@openfactory/contracts";
+import { GitHubBundlePusher, GitHubClient, parseWebhook } from "@openfactory/github";
+import type { AgentHarness, MetricsSink, Signal, TaskId } from "@openfactory/contracts";
 import { FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
-import { DxFakeSink } from "@openfactory/metrics-dxfake";
 import { factScorers } from "@openfactory/scoring";
 import { TaskJobs } from "@openfactory/task-job";
 import { fileEvidenceStore, createApp } from "./app.js";
 import { loadConfig } from "./config.js";
-import { LiteLlmGateway } from "@openfactory/models-litellm";
-import { loadAgent, loadEnvironment, loadWorkspace } from "./plugins.js";
+import { loadSelections, ProviderRegistry } from "./registry.js";
 
 const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), msg, ...fields }));
 
@@ -42,40 +41,42 @@ async function main() {
   }
 
   const pluginEnv = { ...process.env, WORKER_MODEL: cfg.WORKER_MODEL };
-  const [agent, workspace, environment] = await Promise.all([
-    loadAgent(cfg.AGENT_PLUGIN, pluginEnv),
-    loadWorkspace(cfg.WORKSPACE_PLUGIN, pluginEnv),
-    loadEnvironment(cfg.ENV_PLUGIN, pluginEnv),
-  ]);
-  const sinks: MetricsSink[] = cfg.DXFAKE_URL && cfg.DXFAKE_TOKEN ? [new DxFakeSink({ baseUrl: cfg.DXFAKE_URL, token: cfg.DXFAKE_TOKEN })] : [];
+  const registry = new ProviderRegistry(pluginEnv, log);
+  const { selections, source } = loadSelections(pluginEnv, cfg.FACTORY_FILE);
+  log("providers from", { source });
+  const p = await registry.buildAll(selections);
+  const need = <T>(v: T | undefined, key: string): T => {
+    if (!v) throw new Error(`no provider configured for ${key}`);
+    return v;
+  };
+  const agent = need(p.agent, "agent");
+  const workspace = need(p.workspace, "workspace");
+  const environment = need(p.devEnvironment, "devEnvironment");
+  const codeForge = need(p.codeForge, "codeForge");
+  const chat = need(p.chat, "chat");
+  const sinks: MetricsSink[] = p.metrics ? [p.metrics] : [];
   const evidence = fileEvidenceStore(join(cfg.DATA_DIR, "evidence"), cfg.PUBLIC_URL);
-  const chat = new GitHubChat(gh);
-  const codeHost = new GitHubCodeHost(gh, { token: () => cfg.GITHUB_TOKEN });
 
   const jobs = new TaskJobs(
     {
       ledger,
       rules: { label: cfg.FACTORY_LABEL, botLogins, maxTaskUsd: cfg.MAX_TASK_USD, maxReviewRounds: cfg.MAX_REVIEW_ROUNDS },
       chat,
-      codeHost,
+      codeForge,
       agent,
       workspace,
       environment,
       evidence,
-      pusher: new GitHubBundlePusher({ token: () => cfg.GITHUB_TOKEN }),
-      modelKeys: (() => {
-        if (!cfg.LITELLM_ADMIN_URL || !cfg.LITELLM_MASTER_KEY) return null;
-        const gateway = new LiteLlmGateway({
-          adminUrl: cfg.LITELLM_ADMIN_URL,
-          masterKey: cfg.LITELLM_MASTER_KEY,
-          agentBaseUrl: cfg.LITELLM_ADMIN_URL,
-          models: cfg.TASK_KEY_MODELS.split(",").map((m) => m.trim()),
-          // The agent's base URL comes from AGENT_ENV_JSON; the gateway only adds the task's key.
-          envNames: { baseUrl: null, key: "ANTHROPIC_API_KEY" },
-          fetch,
-        });
-        return { forTask: (taskId: string) => gateway.forTask(taskId, { usd: cfg.MAX_TASK_USD }), revoke: (taskId: string) => gateway.revoke(taskId) };
-      })(),
+      // Push credentials come from Secrets when configured (per repo, write), else the server's GitHub token.
+      pusher: new GitHubBundlePusher({
+        token: async (repo) => (p.secrets ? (await p.secrets.issue({ kind: "git", repo, access: "write" })).value : cfg.GITHUB_TOKEN),
+      }),
+      modelKeys: p.modelGateway
+        ? {
+            forTask: (taskId: string) => p.modelGateway!.forTask(taskId as TaskId, { usd: cfg.MAX_TASK_USD }),
+            revoke: (taskId: string) => p.modelGateway!.revoke(taskId as TaskId),
+          }
+        : null,
       scorers: factScorers,
       sinks,
       config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/" },
@@ -105,7 +106,7 @@ async function main() {
     return {
       name: agent.name,
       model,
-      openSession: async (input) => (await (loaded ??= loadAgent(cfg.AGENT_PLUGIN, { ...pluginEnv, WORKER_MODEL: model }))).openSession(input),
+      openSession: async (input) => (await (loaded ??= registry.build("agent", selections.agent!, { WORKER_MODEL: model }))).openSession(input),
     };
   };
 
@@ -139,12 +140,11 @@ async function main() {
   });
   const server = serve({ fetch: app.fetch, port: cfg.PORT }, (i) => log("listening", { port: i.port }));
 
-  const poller =
-    cfg.SIGNALS !== "webhook"
-      ? await new GitHubPollingSource(gh, { repos: cfg.repos, intervalMs: cfg.POLL_INTERVAL_MS, lookbackMs: cfg.POLL_LOOKBACK_MS, log }).start(async (s) => {
-          await onSignal(s);
-        })
-      : null;
+  const poller = p.signals
+    ? await p.signals.start(async (s) => {
+        await onSignal(s);
+      })
+    : null;
 
   const shutdown = async () => {
     log("shutting down");

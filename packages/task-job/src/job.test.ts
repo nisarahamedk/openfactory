@@ -5,8 +5,8 @@ import { PGlite } from "@electric-sql/pglite";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import type {
   AgentHarness,
-  ChatSurface,
-  CodeHost,
+  Chat,
+  CodeForge,
   Environment,
   EnvironmentHandle,
   MetricsSink,
@@ -101,7 +101,7 @@ function world() {
   };
 
   let prCounter = 40;
-  const codeHost: CodeHost = {
+  const codeForge: CodeForge = {
     name: "fake-gh",
     async openPullRequest(i) {
       const existing = prs.get(i.head);
@@ -115,7 +115,7 @@ function world() {
     },
     mintPushToken: async () => ({ token: "t", expiresAt: "" }),
   };
-  const chat: ChatSurface = {
+  const chat: Chat = {
     name: "fake-chat",
     async post(t, md) {
       posts.push({ to: t.issueOrPr, md });
@@ -126,7 +126,7 @@ function world() {
   const sink: MetricsSink = { name: "fake-dx", writeTasks: async (r) => void sunk.push(...r) };
   const pushed: string[] = [];
   const pusher = { push: async (_r: unknown, branch: string, b: Uint8Array) => void pushed.push(`${branch}=${Buffer.from(b).toString()}`) };
-  return { workspace, environment, agent, codeHost, chat, sink, posts, sessions, prompts, life, sunk, files, pusher, pushed };
+  return { workspace, environment, agent, codeForge, chat, sink, posts, sessions, prompts, life, sunk, files, pusher, pushed };
 }
 
 describe("task job", () => {
@@ -144,7 +144,7 @@ describe("task job", () => {
         ledger,
         rules: { label: "factory", botLogins: ["factory-bot"], maxTaskUsd: 10, maxReviewRounds: 3 },
         chat: w.chat,
-        codeHost: w.codeHost,
+        codeForge: w.codeForge,
         agent: w.agent,
         workspace: w.workspace,
         environment: w.environment,

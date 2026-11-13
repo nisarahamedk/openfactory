@@ -1,0 +1,10 @@
+# Which provider serves each abstraction. Anything left out falls back to env vars
+# (AGENT_PLUGIN, WORKSPACE_PLUGIN, ENV_PLUGIN, SIGNALS, DXFAKE_URL...). See docs/plugins.md.
+providers:
+  codeForge: github
+  chat: github
+  signals: { github: { repos: [nisarahamedk/firstword], pollIntervalMs: 20000 } }
+  agent: acp
+  workspace: k8s
+  devEnvironment: devspace   # or "none" for repos without a running product
+  metrics: dxfake

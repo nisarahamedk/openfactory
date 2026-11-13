@@ -1,6 +1,6 @@
 # Plugins: abstractions, providers and open protocols
 
-Status: **Decided** by Nisar on 2026-11-13. The code still uses the older shape. The interface changes land after the first end-to-end run, so they don't disturb it.
+Status: **Decided** by Nisar on 2026-11-13. Migration steps 1 and 3 are done (renames, `github` provider, provider registry with `factory.yaml`; example in `examples/factory/factory.yaml`); the rest is in progress.
 
 ## The rule
 
@@ -31,10 +31,10 @@ Status: **Decided** by Nisar on 2026-11-13. The code still uses the older shape.
 
 | Abstraction | Job | Open protocol | Providers (example) | Today |
 |---|---|---|---|---|
-| CodeForge | branches, PRs, push tokens, CI status | (none common) | GitHub, GitLab, Bitbucket | `CodeHost` in `code-github` |
+| CodeForge | branches, PRs, push tokens, CI status | (none common) | GitHub, GitLab, Bitbucket | `CodeForge` in the `github` provider |
 | WorkTracker | issues, tickets, status, links | MCP for agent access | Jira, Linear, GitHub Issues | missing |
 | Signals | events that start or wake a task | webhooks, CloudEvents | GitHub, Jira, Slack, Datadog alerts | `SignalSource` |
-| Chat | talk to people where the task lives | (none common) | PR comments, Slack, Teams | `ChatSurface` |
+| Chat | talk to people where the task lives | (none common) | PR comments, Slack, Teams | `Chat` in the `github` provider |
 | AgentHarness | the coding agent | **ACP** | Claude Code, Codex, Copilot CLI, Gemini, Pi | `agent-acp` |
 | Workspace | where the agent's tools run | OCI images, Kubernetes | k8s pod, agent-sandbox, E2B, Vercel, local | `workspace-k8s`, `workspace-local` |
 | DevEnvironment | the running product to deploy and test | Kubernetes | DevSpace, Okteto, OpenWorld | `env-devspace` |

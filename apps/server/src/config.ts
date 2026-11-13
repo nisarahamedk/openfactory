@@ -8,6 +8,8 @@ const Env = z.object({
   DATA_DIR: z.string().default("/data"),
   FACTORY_API_TOKEN: z.string().optional(), // bearer for /v1; unset = open (dev only)
   FACTORY_VERSION: z.string().default("fv_dev"),
+  /** factory.yaml with `providers:`; env vars below fill anything it leaves out. */
+  FACTORY_FILE: z.string().optional(),
   FACTORY_LABEL: z.string().default("factory"),
   FACTORY_REPOS: z.string(), // "owner/name,owner/name"
   BASE_BRANCH: z.string().default("main"),

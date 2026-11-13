@@ -1,7 +1,7 @@
 import type {
   AgentHarness,
-  ChatSurface,
-  CodeHost,
+  Chat,
+  CodeForge,
   Environment,
   MetricsSink,
   RepoRef,
@@ -34,8 +34,8 @@ export type Log = (msg: string, fields?: Record<string, unknown>) => void;
 export type JobDeps = {
   ledger: Ledger;
   rules: RulesConfig;
-  chat: ChatSurface;
-  codeHost: CodeHost;
+  chat: Chat;
+  codeForge: CodeForge;
   agent: AgentHarness;
   workspace: Workspace;
   environment: Environment;

@@ -14,10 +14,12 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { verify } from "@octokit/webhooks-methods";
 import {
+  defineProvider,
+  type ProviderContext,
   FACTORY_MARKER,
   Signal,
-  type ChatSurface,
-  type CodeHost,
+  type Chat,
+  type CodeForge,
   type RepoRef,
   type SignalSource,
 } from "@openfactory/contracts";
@@ -62,7 +64,7 @@ export class GitHubClient {
 
 const r = (repo: RepoRef) => `/repos/${repo.owner}/${repo.name}`;
 
-export class GitHubChat implements ChatSurface {
+export class GitHubChat implements Chat {
   readonly name = "github";
   constructor(private readonly gh: GitHubClient) {}
   async post(target: { repo: RepoRef; issueOrPr: number }, markdown: string): Promise<{ url: string }> {
@@ -75,7 +77,7 @@ export class GitHubChat implements ChatSurface {
 
 type Pull = { number: number; html_url: string; head: { sha: string; ref: string }; state: string };
 
-export class GitHubCodeHost implements CodeHost {
+export class GitHubCodeForge implements CodeForge {
   readonly name = "github";
   constructor(
     private readonly gh: GitHubClient,
@@ -161,7 +163,7 @@ export class GitHubPollingSource implements SignalSource {
   readonly name = "github-poll";
   constructor(
     private readonly gh: GitHubClient,
-    private readonly opts: { repos: RepoRef[]; intervalMs: number; lookbackMs: number; log?: (m: string, f?: object) => void },
+    private readonly opts: { repos: RepoRef[]; intervalMs: number; lookbackMs: number; log?: (m: string, f?: Record<string, unknown>) => void },
   ) {}
 
   async pollOnce(repo: RepoRef, since: string): Promise<Signal[]> {
@@ -265,7 +267,7 @@ const run = promisify(execFile);
  */
 export class GitHubBundlePusher {
   constructor(
-    private readonly opts: { token: () => string | Promise<string>; remoteUrl?: (repo: RepoRef) => string },
+    private readonly opts: { token: (repo: RepoRef) => string | Promise<string>; remoteUrl?: (repo: RepoRef) => string },
   ) {}
 
   async push(repo: RepoRef, branch: string, bundle: Uint8Array): Promise<void> {
@@ -277,7 +279,7 @@ export class GitHubBundlePusher {
       const git = (...args: string[]) => run("git", args, { cwd: dir, maxBuffer: 64 * 1024 * 1024 });
       await git("init", "-q", "--bare", "repo.git");
       await run("git", ["--git-dir", "repo.git", "fetch", "-q", file, `+refs/heads/${branch}:refs/heads/${branch}`], { cwd: dir });
-      const token = await this.opts.token();
+      const token = await this.opts.token(repo);
       const auth = Buffer.from(`x-access-token:${token}`).toString("base64");
       await run(
         "git",
@@ -301,3 +303,50 @@ export class GitHubBundlePusher {
     }
   }
 }
+
+// ───────────────────────────── provider ─────────────────────────────
+
+
+function clientFrom(ctx: ProviderContext): { gh: GitHubClient; token: () => string } {
+  const tokenEnv = typeof ctx.options.tokenEnv === "string" ? ctx.options.tokenEnv : "GITHUB_TOKEN";
+  const token = () => {
+    const t = ctx.env[tokenEnv];
+    if (!t) throw new Error(`github provider: ${tokenEnv} is not set`);
+    return t;
+  };
+  return { gh: new GitHubClient({ token, ...(typeof ctx.options.apiUrl === "string" ? { apiUrl: ctx.options.apiUrl } : {}) }), token };
+}
+
+function reposFrom(ctx: ProviderContext): RepoRef[] {
+  const raw = Array.isArray(ctx.options.repos) ? (ctx.options.repos as string[]) : (ctx.env.FACTORY_REPOS ?? "").split(",");
+  return raw
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      const [owner, name] = s.split("/");
+      if (!owner || !name) throw new Error(`github provider: bad repo "${s}" (want owner/name)`);
+      return { host: "github" as const, owner, name };
+    });
+}
+
+/**
+ * The github provider: codeForge (PRs, pushes), chat (issue and PR comments) and signals (polling).
+ * factory.yaml options: tokenEnv (default GITHUB_TOKEN), apiUrl, repos, pollIntervalMs, lookbackMs.
+ */
+export const provider = defineProvider({
+  name: "github",
+  provides: {
+    codeForge: (ctx) => {
+      const { gh, token } = clientFrom(ctx);
+      return new GitHubCodeForge(gh, { token });
+    },
+    chat: (ctx) => new GitHubChat(clientFrom(ctx).gh),
+    signals: (ctx) =>
+      new GitHubPollingSource(clientFrom(ctx).gh, {
+        repos: reposFrom(ctx),
+        intervalMs: Number(ctx.options.pollIntervalMs ?? ctx.env.POLL_INTERVAL_MS ?? 20_000),
+        lookbackMs: Number(ctx.options.lookbackMs ?? ctx.env.POLL_LOOKBACK_MS ?? 15 * 60_000),
+        log: ctx.log,
+      }),
+  },
+});
