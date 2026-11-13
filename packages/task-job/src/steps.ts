@@ -506,6 +506,49 @@ export async function reconcileCost(deps: JobDeps, taskId: TaskId): Promise<void
   }
 }
 
+const worldRuns = new Map<string, Promise<void>>();
+
+/**
+ * Run the factory's world check against the primary PR's head, once per head, in the background: a 30-day world
+ * can take minutes and must never hold up review. The result lands as a world_check event (and the checks.world
+ * score). Returns the running promise (tests await it). Never throws.
+ */
+export function startWorldCheck(deps: JobDeps, taskId: TaskId): Promise<void> {
+  const w = deps.world;
+  if (!w) return Promise.resolve();
+  const running = worldRuns.get(taskId);
+  if (running) return running; // one world at a time per task; the next settle picks up a newer head
+  const run = (async () => {
+    const record = await mustTask(deps, taskId);
+    const head = record.pr?.headSha;
+    if (!head) return;
+    const key = `world:${taskId}:${head}`;
+    if (await deps.ledger.seen(key)) return;
+    const startedAt = new Date().toISOString();
+    let result;
+    try {
+      result = await w.check.run({ task: record, repo: record.source.repo, headSha: head, world: w.world, simDays: w.simDays });
+    } catch (e) {
+      result = {
+        world: w.world,
+        headSha: head,
+        simDays: w.simDays,
+        status: "error" as const,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        invariants: [{ name: "world ran", ok: false, detail: describeError(e).slice(0, 500) }],
+        metrics: [],
+        reportUrl: null,
+      };
+    }
+    await deps.ledger.append(taskId, "world_check", result, { dedupeKey: key });
+    await scoreAndExport(deps, taskId);
+  })().catch((e) => deps.log("world check failed", { taskId, error: describeError(e) }));
+  const tracked = run.finally(() => worldRuns.delete(taskId));
+  worldRuns.set(taskId, tracked);
+  return tracked;
+}
+
 /** Score the record and push it to every metrics sink. Never throws. */
 export async function scoreAndExport(deps: JobDeps, taskId: TaskId): Promise<void> {
   await reconcileCost(deps, taskId);

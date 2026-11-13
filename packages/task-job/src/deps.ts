@@ -1,5 +1,6 @@
 import type {
   AgentHarness,
+  WorldCheck,
   Chat,
   CodeForge,
   Environment,
@@ -39,6 +40,8 @@ export type JobDeps = {
   evidence: EvidenceStore;
   modelKeys: ModelKeys | null;
   scorers: Scorer[];
+  /** Run the product forward in a simulated world against each settled PR head (optional; slow, runs in the background). */
+  world?: { check: WorldCheck; world: string; simDays: number } | null;
   sinks: MetricsSink[];
   config: {
     baseBranch: string;

@@ -24,6 +24,7 @@ import {
   runTurn,
   scoreAndExport,
   sleepAll,
+  startWorldCheck,
   wakeAll,
 } from "./steps.js";
 
@@ -70,6 +71,7 @@ async function gatePhase(deps: JobDeps, taskId: TaskId, round: number, s: Turnis
     }
     if (gate.kind === "give_up") throw new Error(`no reviewable result after ${s.nudges} nudges: ${gate.reason}`);
     await announceReview(deps, taskId, s.summary, round);
+    void startWorldCheck(deps, taskId);
     await sleepAll(deps, taskId);
     await scoreAndExport(deps, taskId);
     await done(rt, c);

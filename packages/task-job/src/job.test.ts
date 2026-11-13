@@ -154,6 +154,17 @@ describe("task job", () => {
         modelKeys: { forTask: async (t: string) => ({ ANTHROPIC_API_KEY: `key-${t}` }), revoke: async () => {}, spend: async () => 0.5 * w.prompts.length },
         evidence: { put: async (t, name) => ({ url: `https://factory/evidence/${t}/${name}` }) },
         scorers: factScorers,
+        world: {
+          world: "shop-30d",
+          simDays: 30,
+          check: {
+            name: "fake-world",
+            run: async (i) => ({
+              world: i.world, headSha: i.headSha, simDays: i.simDays, status: "passed", startedAt: "t0", finishedAt: "t1",
+              invariants: [{ name: "money conserved", ok: true, detail: "" }], metrics: [], reportUrl: null,
+            }),
+          },
+        },
         sinks: [w.sink],
         config: { baseBranch: "main", workerImage: null, agentEnv: {}, maxNudges: 1, branchPrefix: "factory/" },
         log: () => {},
@@ -177,8 +188,10 @@ describe("task job", () => {
     const taskId = a.taskId!;
     await jobs.idle(taskId);
 
+    await new Promise((res) => setTimeout(res, 50)); // the world check runs in the background
     let r = (await ledger.getTask(taskId))!;
     expect(r.status).toBe("awaiting_review");
+    expect(r.worldChecks?.map((c) => [c.world, c.status, c.headSha])).toEqual([["shop-30d", "passed", r.pr?.headSha]]);
     expect(r.pr?.number).toBe(41);
     expect(r.evidence).toHaveLength(1);
     expect(r.harnessSessionId).toBe("sess-1");
