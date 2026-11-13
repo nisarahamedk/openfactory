@@ -141,6 +141,7 @@ async function main() {
           workspace,
           systemPrompt: spec.systemPrompt || "You are a careful software engineer. Do the task, with tests.",
           env: { ...cfg.agentEnv, ANTHROPIC_MODEL: spec.model },
+          environment, // world checks deploy each attempt into its own fresh environment
         }),
         maxCostUsdPerRun: cfg.BENCH_MAX_USD_PER_RUN,
         now: () => new Date().toISOString(),

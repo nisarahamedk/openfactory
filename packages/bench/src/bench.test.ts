@@ -3,8 +3,8 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { AgentHarness, LedgerReader, TaskRecord, Workspace, WorkspaceHandle } from "@openfactory/contracts";
-import { captureBenchmarkTask, compareArms, createBenchRoutes, defaultCaptureOptions, FileBenchStore, runAB, type ArmResult, type PullRequestSource } from "./index.js";
+import type { AgentHarness, Environment, LedgerReader, TaskRecord, Workspace, WorkspaceHandle } from "@openfactory/contracts";
+import { captureBenchmarkTask, compareArms, createBenchRoutes, defaultCaptureOptions, FileBenchStore, runAB, runAttempt, type ArmResult, type PullRequestSource } from "./index.js";
 
 // A tiny repo: add.js is broken at the start commit; the "merged PR" fixed it and added a test.
 function makeOrigin(): { dir: string; base: string } {
@@ -35,7 +35,7 @@ function localWorkspace(origin: string): Workspace & { live: number } {
         repoPath,
         async exec(cmd, opts) {
           const [bin = "", ...args] = cmd;
-          const r = spawnSync(bin, args, { cwd: opts?.cwd ?? repoPath, encoding: "utf8" });
+          const r = spawnSync(bin, args, { cwd: opts?.cwd ?? repoPath, encoding: "utf8", env: { ...process.env, ...opts?.env } });
           return { exitCode: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
         },
         async spawn() {
@@ -255,5 +255,93 @@ describe("check spec", () => {
     const r = spawnSync(bin, args, { cwd: dir, encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(r.stdout.split("\n").filter(Boolean).sort()).toEqual(["a.test.ts", "c.test.ts", "e2e"]);
+  });
+});
+
+describe("world check", () => {
+  const WORLD_TEST = "const add = require(process.env.FACTORY_ENV_URL + '/deployed.js'); if (add(2, 3) !== 5) { console.error('deployed add broken'); process.exit(1); }\n";
+  const worldPrs = (base: string): PullRequestSource => ({
+    mergedPullRequest: async () => ({
+      baseSha: base,
+      mergeSha: "m",
+      files: [
+        { path: "add.js", status: "modified", contentAtMerge: "module.exports = (a, b) => a + b;\n" },
+        { path: "tests/add.test.js", status: "added", contentAtMerge: HIDDEN_TEST },
+        { path: "tests/e2e/add.spec.js", status: "added", contentAtMerge: WORLD_TEST },
+      ],
+    }),
+  });
+
+  /** Environment double: a temp dir stands for the running product; "deploy" copies add.js into it. */
+  function fakeEnvironment(deploy: string): Environment & { live: number; created: number } {
+    const env = {
+      name: "fake",
+      live: 0,
+      created: 0,
+      async create() {
+        const dir = mkdtempSync(join(tmpdir(), "bench-world-"));
+        env.live++;
+        env.created++;
+        return {
+          name: dir,
+          credentialsForWorkspace: async () => [{ path: join(dir, "kubeconfig"), content: "fake" }],
+          envVars: async () => ({ FACTORY_ENV_URL: dir, FACTORY_ENV_DEPLOY: deploy.replaceAll("{dir}", dir) }),
+          skill: async () => "ENV SKILL: deploy with $FACTORY_ENV_DEPLOY",
+          sleep: async () => {},
+          wake: async () => {},
+          destroy: async () => {
+            rmSync(dir, { recursive: true, force: true });
+            env.live--;
+          },
+        };
+      },
+      get: async () => null,
+    };
+    return env;
+  }
+
+  it("capture keeps world tests out of the repo check; replay deploys and runs them in a fresh env", async () => {
+    const { captureOptionsFrom, parseCheckSpec } = await import("./index.js");
+    const spec = parseCheckSpec(
+      JSON.stringify({ testFilePattern: "^tests/.+\\.(test|spec)\\.js$", run: ["node"], filter: "append-files", world: { testFilePattern: "^tests/e2e/", run: "node" } }),
+    );
+    const { dir, base } = makeOrigin();
+    const task = await captureBenchmarkTask("task_abc", { ledger: ledgerWith(mergedRecord()), prs: worldPrs(base), options: captureOptionsFrom(spec), now: "n" });
+    expect(Object.keys(task.check.files)).toEqual(["tests/add.test.js"]);
+    expect(Object.keys(task.check.world?.files ?? {})).toEqual(["tests/e2e/add.spec.js"]);
+
+    const ws = localWorkspace(dir);
+    const good = fakeEnvironment('cp add.js "{dir}/deployed.js"');
+    const broken = fakeEnvironment("echo deploy failed >&2; exit 3");
+    const prompts: string[] = [];
+    const seeing = (h: AgentHarness): AgentHarness => ({ ...h, openSession: async (i) => (prompts.push(i.systemPrompt), h.openSession(i)) });
+    const arm = (label: string, environment: Environment | null) => ({ label, factoryVersion: label, harness: seeing(harness("good", 0.1)), workspace: ws, systemPrompt: "", env: {}, environment });
+
+    const ok = await runAttempt(task, arm("A", good), 1, { checkTimeoutMs: 10_000 });
+    expect(ok.checks).toEqual({ repo: true, world: true });
+    expect(ok.passed).toBe(true);
+    expect(prompts[0]).toContain("ENV SKILL");
+
+    const bad = await runAttempt(task, arm("B", broken), 1, { checkTimeoutMs: 10_000 });
+    expect(bad.checks).toEqual({ repo: true, world: false });
+    expect(bad.passed).toBe(false);
+    expect(bad.notes).toContain("deploy failed");
+
+    const none = await runAttempt(task, arm("C", null), 1, { checkTimeoutMs: 10_000 });
+    expect(none.checks).toEqual({ repo: true, world: null });
+    expect(none.passed).toBe(true);
+    expect(none.notes).toContain("world check skipped");
+
+    expect([good.live, broken.live, ws.live]).toEqual([0, 0, 0]);
+    expect(good.created + broken.created).toBe(2);
+  });
+
+  it("a lazy agent fails the world check too, since the deployed code is the agent's", async () => {
+    const { captureOptionsFrom, parseCheckSpec } = await import("./index.js");
+    const spec = parseCheckSpec(JSON.stringify({ testFilePattern: "^tests/[^/]+\\.test\\.js$", run: ["node"], filter: "append-files", world: { testFilePattern: "^tests/e2e/", run: "node" } }));
+    const { dir, base } = makeOrigin();
+    const task = await captureBenchmarkTask("task_abc", { ledger: ledgerWith(mergedRecord()), prs: worldPrs(base), options: captureOptionsFrom(spec), now: "n" });
+    const r = await runAttempt(task, { label: "L", factoryVersion: "L", harness: harness("lazy", 0), workspace: localWorkspace(dir), systemPrompt: "", env: {}, environment: fakeEnvironment('cp add.js "{dir}/deployed.js"') }, 1, { checkTimeoutMs: 10_000 });
+    expect(r.checks).toEqual({ repo: false, world: false });
   });
 });

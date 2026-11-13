@@ -224,6 +224,8 @@ class DevspaceEnvironmentHandle implements EnvironmentHandle {
       FACTORY_ENV_NAME: `devspace:${this.name}`,
       FACTORY_EVIDENCE_DIR: `${this.options.workspaceHome}/evidence`,
       DEVSPACE_NAMESPACE: this.name,
+      /** How to deploy the checkout here; benchmark world checks run it before their tests. */
+      FACTORY_ENV_DEPLOY: this.options.deployCommand.replaceAll("{namespace}", this.name),
     };
   }
 

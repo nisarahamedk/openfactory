@@ -32,6 +32,12 @@ export interface CaptureOptions {
   checkCommand: (testFiles: string[]) => string[];
   /** Used when the PR changed no test files. Null makes such tasks uncapturable. */
   fallbackCheckCommand: string[] | null;
+  /**
+   * World check: which changed files are tests that need the running product (e.g. e2e),
+   * and the command that deploys the attempt and runs them. Those files are kept out of
+   * the repo check. Undefined or null: no world check.
+   */
+  world?: { isTestFile: (path: string) => boolean; command: (testFiles: string[]) => string[] } | null;
 }
 
 const TEST_FILE = /(^|\/)(e2e|tests?|__tests__)\/|\.(test|spec)\.[cm]?[jt]sx?$/;
@@ -63,14 +69,21 @@ export async function captureBenchmarkTask(
     throw new CaptureError("TASK_NOT_MERGED", `task ${taskId} is ${record.status}; only merged tasks can become benchmarks`);
 
   const pr = await deps.prs.mergedPullRequest(record.source.repo, record.pr.number);
-  const tests = pr.files.filter((f) => f.contentAtMerge !== null && deps.options.isTestFile(f.path));
+  const present = pr.files.filter((f) => f.contentAtMerge !== null);
+  const worldOpt = deps.options.world ?? null;
+  const worldTests = worldOpt === null ? [] : present.filter((f) => worldOpt.isTestFile(f.path));
+  const tests = present.filter((f) => deps.options.isTestFile(f.path) && !worldTests.includes(f));
   const files = Object.fromEntries(tests.map((f) => [f.path, f.contentAtMerge ?? ""]));
+  const world =
+    worldOpt !== null && worldTests.length > 0
+      ? { command: worldOpt.command(worldTests.map((t) => t.path)), files: Object.fromEntries(worldTests.map((f) => [f.path, f.contentAtMerge ?? ""])) }
+      : null;
 
   let check: BenchmarkTask["check"];
   if (tests.length > 0) {
-    check = { kind: "tests_from_merged_pr", command: deps.options.checkCommand(tests.map((t) => t.path)), files };
+    check = { kind: "tests_from_merged_pr", command: deps.options.checkCommand(tests.map((t) => t.path)), files, world };
   } else if (deps.options.fallbackCheckCommand !== null) {
-    check = { kind: "command", command: deps.options.fallbackCheckCommand, files: {} };
+    check = { kind: "command", command: deps.options.fallbackCheckCommand, files: {}, world };
   } else {
     throw new CaptureError("NO_CHECK", `PR #${record.pr.number} changed no test files and no fallback check command is set`);
   }
@@ -152,6 +165,20 @@ export const CheckSpec = z.object({
   testDir: z.string().default("tests"),
   testSuffix: z.string().default(".test.ts"),
   fallbackRun: z.array(z.string()).nullable().default(null),
+  /**
+   * World check, run in a fresh DevEnvironment. `deploy` and `run` are shell; the hidden
+   * world test files are appended to `run`. The environment's variables are set
+   * (FACTORY_ENV_URL, FACTORY_ENV_DEPLOY, KUBECONFIG...).
+   * Example (Playwright e2e): {"testFilePattern":"^tests/e2e/.+\\.spec\\.ts$","run":"STAGE_URL=\"$FACTORY_ENV_URL\" pnpm exec playwright test"}
+   */
+  world: z
+    .object({
+      testFilePattern: z.string().min(1),
+      deploy: z.string().min(1).default('eval "$FACTORY_ENV_DEPLOY"'),
+      run: z.string().min(1),
+    })
+    .nullable()
+    .default(null),
 });
 export type CheckSpec = z.infer<typeof CheckSpec>;
 
@@ -179,5 +206,13 @@ export function captureOptionsFrom(spec: CheckSpec): CaptureOptions {
         `*" $f "*) ;; *) rm -f -- "$f" ;; esac; done && cd - >/dev/null && exec "$@"`;
       return ["bash", "-c", script, "bench-check", ...spec.run];
     },
+    world:
+      spec.world === null
+        ? null
+        : (() => {
+            const w = spec.world;
+            const wp = new RegExp(w.testFilePattern);
+            return { isTestFile: (p: string) => wp.test(p), command: (files: string[]) => ["bash", "-c", `set -e\n${w.deploy}\n${w.run} ${files.map(sh).join(" ")}`] };
+          })(),
   };
 }
