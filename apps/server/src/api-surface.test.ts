@@ -43,6 +43,8 @@ async function setup() {
     bench,
     factory: async () => { throw new Error("unused"); },
     cancel: async () => null,
+    retry: async () => null,
+    health: async () => ({ at: "t", ok: true, checks: [] }),
     publicUrl: "https://f.example",
     log: () => {},
   });

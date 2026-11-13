@@ -239,8 +239,31 @@ export class TaskJobs {
     await sleepAll(this.deps, taskId);
     await scoreAndExport(this.deps, taskId);
     const target = record.pr ? { repo: record.source.repo, issueOrPr: record.pr.number } : issueTarget(record);
-    if (target) await this.deps.chat.post(target, `Stopped by ${by}${reason ? `: ${reason}` : "."} Comment again to resume.`).catch(() => {});
+    if (target) await this.deps.chat.post(target, `Stopped by ${by}${reason ? `: ${reason}` : "."} Comment again or press Retry in the factory app to resume.`).catch(() => {});
     return (await l.getTask(taskId)) ?? record;
+  }
+
+  /**
+   * Try a failed or stopped task again, as if someone had commented: a task without a PR starts over from
+   * intake (its workspace and environment are woken, not rebuilt); a task with a PR gets a review round that
+   * tells the agent to carry on. Returns null when the task is unknown; a task that isn't failed is returned as is.
+   */
+  async retry(taskId: TaskId, by: string): Promise<TaskRecord | null> {
+    const l = this.deps.ledger;
+    const task = await l.getTask(taskId);
+    if (!task) return null;
+    if (task.status !== "failed") return task;
+    if ((await this.liveJobTasks(taskId)).length > 0) return task;
+    await l.append(taskId, "retry_requested", { by });
+    if (!task.pr) await this.create(taskId, (t) => ({ def: t.Intake, input: { taskId } }));
+    else
+      await this.create(taskId, (t) => ({
+        def: t.Review,
+        input: { taskId, body: `${by} asked you to try again after the task stopped. Carry on from where you left off and finish the ask.`, round: task.people.reviewRounds + 1, after: [] },
+      }));
+    const target = task.pr ? { repo: task.source.repo, issueOrPr: task.pr.number } : issueTarget(task);
+    if (target) void this.deps.chat.post(target, `Retrying, as ${by} asked.`).catch(() => {});
+    return (await l.getTask(taskId)) ?? task;
   }
 
   /** Have the foreman post in the issue. Failures are logged; the foreman never blocks the job. */

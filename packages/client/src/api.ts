@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { BenchmarkTask, LedgerEvent, RolloutState, SavedView, TaskRecord, Team, type LedgerReader, type TaskId, type TaskStatus, type ViewShare } from "@openfactory/contracts";
 import { BenchRun } from "@openfactory/bench";
-import { FactoryInfo, FactoryView } from "./routes.js";
+import { FactoryInfo, FactoryView, HealthReport } from "./routes.js";
 
 export interface FactoryApiConfig {
   baseUrl: string;
@@ -92,6 +92,16 @@ export class FactoryApi implements LedgerReader {
   /** Stop a task: aborts its job, sleeps the environment, marks it failed (stage "cancelled"). */
   cancel(id: TaskId, input: { by?: string; reason?: string } = {}): Promise<TaskRecord> {
     return this.call("POST", `/v1/tasks/${id}/cancel`, oneOf(TaskRecord, "task"), input);
+  }
+
+  /** Try a failed or stopped task again. */
+  retry(id: TaskId, input: { by?: string } = {}): Promise<TaskRecord> {
+    return this.call("POST", `/v1/tasks/${id}/retry`, oneOf(TaskRecord, "task"), input);
+  }
+
+  /** The factory's start-up checks. */
+  health(): Promise<HealthReport> {
+    return this.call("GET", "/v1/health", oneOf(HealthReport, "health"));
   }
 
   /**

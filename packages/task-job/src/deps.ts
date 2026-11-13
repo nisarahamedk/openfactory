@@ -45,6 +45,8 @@ export type JobDeps = {
   /** Per team factory: its world (null: none) and merge-risk rules. Missing: the org defaults above. */
   factories?: Record<string, { world?: { world: string; simDays: number } | null; risk?: RiskConfig }>;
   sinks: MetricsSink[];
+  /** Start-up checks (model access, code-host access). A failing one stops the task before any environment is made. */
+  preflight?: (task: TaskRecord) => Promise<Array<{ name: string; ok: boolean; detail: string; fix: string | null }>>;
   config: {
     baseBranch: string;
     workerImage: string | null;
@@ -57,6 +59,8 @@ export type JobDeps = {
     risk?: RiskConfig | null;
     /** Extra system-prompt text per factory version (how a candidate version differs). */
     versionPrompts?: Record<string, string>;
+    /** Delays before each automatic retry of a passing failure (network, 429, 5xx). Default 5 s, 30 s, 2 min. */
+    retryDelaysMs?: number[];
   };
   log: Log;
 };

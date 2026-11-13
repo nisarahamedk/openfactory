@@ -284,6 +284,7 @@ const ICONS: Record<string, string> = {
   search: '<circle cx="9" cy="9" r="5.5"/><path d="m13.5 13.5 4 4"/>',
   ext: '<path d="M11 3h6v6M17 3l-8 8M14.5 11.5V16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1h4.5"/>',
   stop: '<rect x="5" y="5" width="10" height="10" rx="1.5"/>',
+  retry: '<path d="M16 10a6 6 0 1 1-1.8-4.3M16 3.5v3.5h-3.5"/>',
   plus: '<path d="M10 4v12M4 10h12"/>',
   pr: '<circle cx="5" cy="4.5" r="2"/><circle cx="5" cy="15.5" r="2"/><circle cx="15" cy="15.5" r="2"/><path d="M5 6.5v7M15 13.5V8a2 2 0 0 0-2-2H9M11 4 9 6l2 2"/>',
   cal: '<rect x="3" y="4.5" width="14" height="12.5" rx="2"/><path d="M3 8.5h14M7 2.5v4M13 2.5v4"/>',
@@ -433,6 +434,19 @@ export function Stat({ title, value, meta, hint, children }: { title: string; va
       <div class="big">{value}</div>
       {meta ? <div class="meta">{meta}</div> : null}
       {children}
+    </div>
+  );
+}
+
+/** Shown on every page while a start-up check fails: new tasks stop before they start until it's fixed. */
+export function HealthAlert({ health }: { health: { checks: Array<{ name: string; ok: boolean; detail: string; fix: string | null }> } }) {
+  const bad = health.checks.filter((c) => !c.ok);
+  return (
+    <div class="alert bad">
+      <b>The factory isn't set up to finish tasks.</b> New tasks stop before they start until this is fixed.
+      <ul style="margin:6px 0 0 18px;padding:0">
+        {bad.map((c) => <li><b>{c.name}</b>: {c.detail}.{c.fix ? ` ${c.fix}` : ""}</li>)}
+      </ul>
     </div>
   );
 }

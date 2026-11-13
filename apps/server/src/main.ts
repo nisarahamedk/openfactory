@@ -17,6 +17,7 @@ import { promptTemplates, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps 
 import { fileEvidenceStore, createApp } from "./app.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
+import { Health } from "./health.js";
 import { cachedDirectory, configDirectory, factoryViews, loadOrgConfig } from "./org.js";
 import { loadFactoryExtras, loadModelRouting, loadOutcomeConfig, loadSelections, ProviderRegistry } from "./registry.js";
 
@@ -99,6 +100,27 @@ async function main() {
       },
     ]),
   );
+  const routedModels = [
+    cfg.WORKER_MODEL,
+    ...(modelRouting ? [modelRouting.default, ...modelRouting.routes.map((r) => r.model)] : []),
+    ...Object.values(extras.versionModels ?? {}).flatMap((m) => [m.default, ...m.routes.map((r) => r.model)]),
+  ];
+  const health = new Health({
+    forgeGet: (path) => gh.request("GET", path),
+    repos: cfg.repos,
+    gateway: cfg.MODEL_PROXY_URL && cfg.MODEL_PROXY_KEY ? { baseUrl: cfg.MODEL_PROXY_URL, key: cfg.MODEL_PROXY_KEY } : null,
+    models: cfg.MODEL_PROXY_URL ? [...routedModels, cfg.FOREMAN_MODEL] : [],
+    taskKeyModels: cfg.LITELLM_ADMIN_URL && cfg.LITELLM_MASTER_KEY ? cfg.TASK_KEY_MODELS.split(",").map((s) => s.trim()).filter(Boolean) : null,
+  });
+  const healthRun = async () => {
+    const checks = await health.run();
+    const bad = checks.filter((c) => !c.ok);
+    log(bad.length ? "start-up checks failing" : "start-up checks pass", { failing: bad.map((c) => `${c.name}: ${c.detail}`) });
+  };
+  await healthRun();
+  const healthTimer = setInterval(() => void healthRun().catch(() => {}), 5 * 60_000);
+  healthTimer.unref();
+
   const jobDeps: JobDeps = {
       ledger,
       rules: { label: cfg.FACTORY_LABEL, botLogins, maxTaskUsd: cfg.MAX_TASK_USD, maxReviewRounds: cfg.MAX_REVIEW_ROUNDS },
@@ -119,6 +141,7 @@ async function main() {
       world,
       factories: teamFactories,
       sinks,
+      preflight: (task) => health.forTask(task),
       config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/", risk: extras.risk, versionPrompts: extras.versionPrompts },
       log,
   };
@@ -171,6 +194,13 @@ async function main() {
   const onSignal = (s: Signal) => {
     const next = chain.then(() => jobs.handle(s));
     chain = next.catch((e) => log("signal failed", { id: s.id, type: s.type, error: String(e) }));
+    return next;
+  };
+
+  // Retries share the signal queue too, for the same reason.
+  const onRetry = (id: TaskId, by: string) => {
+    const next = chain.then(() => jobs.retry(id, by));
+    chain = next.catch((e) => log("retry failed", { id, error: String(e) }));
     return next;
   };
 
@@ -283,6 +313,8 @@ async function main() {
     message,
     factory: factoryInfo,
     cancel: (id, by, reason) => onCancel(id, by, reason),
+    retry: (id, by) => onRetry(id, by),
+    health: () => health.current(),
     onSignal,
     evidence,
     apiToken: cfg.FACTORY_API_TOKEN,
@@ -301,6 +333,7 @@ async function main() {
 
   const shutdown = async () => {
     log("shutting down");
+    clearInterval(healthTimer);
     await poller?.stop();
     await outcomeWatch?.stop();
     server.close();

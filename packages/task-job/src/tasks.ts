@@ -12,6 +12,7 @@ import { defineTask, type TaskId as PdTaskId } from "@earendil-works/pi-durable"
 import type { TaskId } from "@openfactory/contracts";
 import type { JobDeps } from "./deps.js";
 import { intakePrompt, reviewPrompt } from "./prompts.js";
+import { AgentGaveUp, classifyError, DEFAULT_RETRY_DELAYS_MS, SetupError, sleepUnlessAborted } from "./errors.js";
 import {
   announceReview,
   describeError,
@@ -40,18 +41,43 @@ const failed = (rt: Rt, c: Context, message: string) =>
   rt.commit(() => ({ status: "terminal", outcome: { status: "failed", error: { message } } }), c);
 const aborted = (_t: unknown, rt: Rt, c: Context) => rt.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), c);
 
+/**
+ * Run one phase. A passing failure (network, 429, 5xx) is retried here with backoff, since every phase is
+ * safe to repeat; each retry is on the task's timeline. Anything else, or a passing failure that outlasts
+ * the retries, stops the task with its kind and a fix, so a person knows what to do.
+ */
 async function guarded(deps: JobDeps, taskId: TaskId, stage: string, rt: Rt, c: Context, body: () => Promise<void>) {
-  try {
-    await body();
-  } catch (e) {
-    if (rt.signal?.aborted) throw e; // aborted: the abort handler records it
-    const message = describeError(e);
-    deps.log("phase failed", { taskId, stage, error: message });
-    await fail(deps, taskId, stage, message);
-    await sleepAll(deps, taskId); // a comment can retry it, so keep the env but stop paying for it
-    await scoreAndExport(deps, taskId);
-    await failed(rt, c, message);
+  const delays = deps.config.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await body();
+      return;
+    } catch (e) {
+      if (rt.signal?.aborted) throw e; // aborted: the abort handler records it
+      const message = describeError(e);
+      const { kind, fix } = classifyError(e, message);
+      if (kind === "passing" && attempt < delays.length) {
+        const inMs = delays[attempt]!;
+        deps.log("phase retrying", { taskId, stage, attempt: attempt + 1, inMs, error: message });
+        await deps.ledger.append(taskId, "retrying", { stage, attempt: attempt + 1, of: delays.length, inMs, message: message.slice(0, 500) });
+        await sleepUnlessAborted(inMs, rt.signal);
+        continue;
+      }
+      deps.log("phase failed", { taskId, stage, kind, error: message });
+      await fail(deps, taskId, stage, message, { kind, fix, attempts: attempt + 1 });
+      await sleepAll(deps, taskId); // a retry can pick it up again, so keep the env but stop paying for it
+      await scoreAndExport(deps, taskId);
+      await failed(rt, c, message);
+      return;
+    }
   }
+}
+
+/** Refuse to start work the factory is set up to fail (start-up checks), before any environment is made. */
+async function checkSetup(deps: JobDeps, taskId: TaskId): Promise<void> {
+  if (!deps.preflight) return;
+  const bad = (await deps.preflight(await mustTask(deps, taskId))).filter((ch) => !ch.ok);
+  if (bad.length) throw new SetupError(bad.map((b) => `${b.name}: ${b.detail}`).join("; "), bad.map((b) => b.fix).filter(Boolean).join(" ") || "Fix the failing start-up checks, then retry.");
 }
 
 /** Shared turn → gate loop used by intake and review rounds. */
@@ -69,7 +95,7 @@ async function gatePhase(deps: JobDeps, taskId: TaskId, round: number, s: Turnis
       await rt.commit(() => ({ status: "running", checkpoint: { phase: "turn", prompt: gate.prompt, nudges: s.nudges + 1 } }), c);
       return;
     }
-    if (gate.kind === "give_up") throw new Error(`no reviewable result after ${s.nudges} nudges: ${gate.reason}`);
+    if (gate.kind === "give_up") throw new AgentGaveUp(`no reviewable result after ${s.nudges} nudges: ${gate.reason}`);
     await announceReview(deps, taskId, s.summary, round);
     void startWorldCheck(deps, taskId);
     await sleepAll(deps, taskId);
@@ -86,6 +112,7 @@ export function jobTasks(deps: JobDeps) {
     phases: {
       prepare: (task, rt, c) =>
         guarded(deps, task.input.taskId, "preparing environment", rt, c, async () => {
+          await checkSetup(deps, task.input.taskId);
           await prepare(deps, task.input.taskId);
           await deps.ledger.setStatus(task.input.taskId, "working");
           const record = await mustTask(deps, task.input.taskId);

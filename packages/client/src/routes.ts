@@ -32,6 +32,19 @@ export type FactoryInfo = z.infer<typeof FactoryInfo>;
 /** Body of POST /v1/tasks/{id}/cancel. */
 export const CancelTask = z.object({ by: z.string().max(100).optional(), reason: z.string().max(1000).optional() }).meta({ id: "CancelTask" });
 
+/** Body of POST /v1/tasks/{id}/retry. */
+export const RetryTask = z.object({ by: z.string().max(100).optional() }).meta({ id: "RetryTask" });
+
+/** GET /v1/health: whether the factory is set up so a task can succeed. */
+export const HealthReport = z
+  .object({
+    at: z.string(),
+    ok: z.boolean(),
+    checks: z.array(z.object({ name: z.string(), ok: z.boolean(), detail: z.string(), fix: z.string().nullable() })),
+  })
+  .meta({ description: "Start-up checks: code host, repos, model gateway and routed models" });
+export type HealthReport = z.infer<typeof HealthReport>;
+
 /** Body of POST /v1/egress. */
 export const EgressReport = z
   .object({
@@ -150,6 +163,21 @@ export const V1_ROUTES: RouteSpec[] = [
     summary: "Stop a task: abort its running turn, put its environment to sleep, mark it failed (stage \"cancelled\"). A later comment resumes it.",
     body: CancelTask,
     responses: { 200: { description: "The task after cancelling", schema: z.object({ task: TaskRecord }) }, ...bad, ...notFound },
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/retry",
+    operationId: "retryTask",
+    summary: "Try a failed or stopped task again: from intake when it has no PR, else as a review round that carries on",
+    body: RetryTask,
+    responses: { 200: { description: "The task after the retry was scheduled", schema: z.object({ task: TaskRecord }) }, ...bad, ...notFound },
+  },
+  {
+    method: "get",
+    path: "/health",
+    operationId: "getHealth",
+    summary: "Start-up checks: code host, repos, model gateway and routed models, each with a fix when it fails",
+    responses: { 200: { description: "Health", schema: z.object({ health: HealthReport }) } },
   },
   {
     method: "get",

@@ -22,7 +22,7 @@ it("serves tasks, signals and evidence behind the API token", async () => {
   });
   const evidence = fileEvidenceStore(mkdtempSync(join(tmpdir(), "ev-")), "https://f.example");
   const got: unknown[] = [];
-  const app = createApp({ ...(await orgDeps()), ledger, onSignal: async (s) => got.push(s), evidence, apiToken: "tok", webhook: null, bench: null, factory: async () => { throw new Error("unused"); }, cancel: async () => null, publicUrl: null, log: () => {} });
+  const app = createApp({ ...(await orgDeps()), ledger, onSignal: async (s) => got.push(s), evidence, apiToken: "tok", webhook: null, bench: null, factory: async () => { throw new Error("unused"); }, cancel: async () => null, retry: async () => null, health: async () => ({ at: "t", ok: true, checks: [] }), publicUrl: null, log: () => {} });
   const auth = { authorization: "Bearer tok" };
 
   expect((await app.request("/v1/tasks")).status).toBe(401);
@@ -68,7 +68,7 @@ it("teams, factories, rollouts, saved views and messages", async () => {
     sent.push(`${author}: ${text}`);
     return null;
   });
-  const app = createApp({ ...deps, ledger, onSignal: async () => null, evidence, apiToken: undefined, webhook: null, bench: null, factory: async () => { throw new Error("unused"); }, cancel: async () => null, publicUrl: null, log: () => {} });
+  const app = createApp({ ...deps, ledger, onSignal: async () => null, evidence, apiToken: undefined, webhook: null, bench: null, factory: async () => { throw new Error("unused"); }, cancel: async () => null, retry: async () => null, health: async () => ({ at: "t", ok: true, checks: [] }), publicUrl: null, log: () => {} });
   const post = (path: string, body: unknown) => app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
   expect((await (await app.request("/v1/teams")).json()).teams.map((t: { slug: string }) => t.slug)).toEqual(["core", "payments"]);
@@ -101,7 +101,7 @@ it("teams, factories, rollouts, saved views and messages", async () => {
 it("asks for a new task", async () => {
   const ledger = new Ledger(drizzle(new PGlite()));
   await ledger.migrate();
-  const app = createApp({ ...(await orgDeps()), ledger, onSignal: async () => null, evidence: fileEvidenceStore(mkdtempSync(join(tmpdir(), "ev-")), "https://f.example"), apiToken: undefined, webhook: null, bench: null, factory: async () => { throw new Error("unused"); }, cancel: async () => null, publicUrl: null, log: () => {} });
+  const app = createApp({ ...(await orgDeps()), ledger, onSignal: async () => null, evidence: fileEvidenceStore(mkdtempSync(join(tmpdir(), "ev-")), "https://f.example"), apiToken: undefined, webhook: null, bench: null, factory: async () => { throw new Error("unused"); }, cancel: async () => null, retry: async () => null, health: async () => ({ at: "t", ok: true, checks: [] }), publicUrl: null, log: () => {} });
   const post = (body: unknown) => app.request("/v1/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   expect((await (await post({ ask: "Add CSV export", requestedBy: "dana" })).json()).issueNumber).toBe(9);
   const bad = await post({ ask: "x y z", repo: "o/none", requestedBy: "dana" });

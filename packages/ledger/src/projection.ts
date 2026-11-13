@@ -60,7 +60,21 @@ export const EventData = {
   cost_adjusted: z.object({ deltaUsd: z.number(), gatewayUsd: z.number() }),
   score_added: z.object({ score: Score }),
   outcome_added: z.object({ outcome: Outcome }),
-  error: z.object({ message: z.string(), stage: z.string() }),
+  /**
+   * What stopped a phase. `kind`: passing (network, 429, 5xx; retried first), setup (the factory is set up
+   * wrong), agent (no reviewable result), unknown. `fix` says what a person should do. Older events have neither.
+   */
+  error: z.object({
+    message: z.string(),
+    stage: z.string(),
+    kind: z.enum(["passing", "setup", "agent", "unknown"]).optional(),
+    fix: z.string().nullable().optional(),
+    attempts: z.number().int().optional(),
+  }),
+  /** A passing failure that the job retries by itself after `inMs`. */
+  retrying: z.object({ stage: z.string(), attempt: z.number().int(), of: z.number().int(), inMs: z.number().int(), message: z.string() }),
+  /** Someone asked to try a failed or stopped task again (the app's Retry, or the API). */
+  retry_requested: z.object({ by: z.string() }),
   /** Network requests from the task's sandbox, as the egress proxy saw them (aggregated per host and window). */
   egress: z.object({ host: z.string(), allowed: z.boolean(), count: z.number().int().positive(), from: z.string(), to: z.string() }),
   /** A signal that changed nothing on the record by itself (merge/close); kept for de-duplication and the timeline. */

@@ -7,7 +7,7 @@ import type { RolloutState, SavedView, Team, TaskRecord } from "@openfactory/con
 import type { BenchRun } from "@openfactory/bench";
 import type { FactoryInfo, FactoryView } from "@openfactory/client";
 import { scorerDocs } from "@openfactory/scoring";
-import { inbox, isOpen, type InboxItem, type TaskFacts } from "./insights.js";
+import { failureLine, inbox, isOpen, type InboxItem, type TaskFacts } from "./insights.js";
 import {
   cameBack,
   DIMENSIONS,
@@ -159,9 +159,9 @@ export function lifeSentence(f: TaskFacts, now: string): string {
     case "asked":
       return "Queued.";
     case "failed":
-      return f.lastError ?? "Failed.";
+      return failureLine(f);
     case "stopped":
-      return f.cancelled ? `Stopped${f.cancelled.by ? ` by ${f.cancelled.by}` : ""}${f.cancelled.reason ? `: ${f.cancelled.reason}` : ""}.` : "Closed without merging.";
+      return f.cancelled ? failureLine(f) : "Closed without merging.";
     default:
       return STATUS[t.status].label;
   }
@@ -208,7 +208,7 @@ export function InboxPage({ facts, now, viewer, scope, teamReviews = [] }: { fac
   const back = facts.filter((f) => !needIds.has(f.task.id) && cameBack(f.task).some((o) => Date.parse(now) - Date.parse(o.arrivedAt) < 14 * 86_400_000));
   const working = facts.filter((f) => isOpen(f.task.status) && !needIds.has(f.task.id));
   const finished = facts.filter((f) => !isOpen(f.task.status) && !needIds.has(f.task.id) && !back.includes(f) && Date.parse(now) - Date.parse(f.task.updatedAt) < 7 * 86_400_000);
-  const verb: Record<InboxItem["kind"], string> = { pr_review: "Review", ci_failing: "Open", blocked: "Answer", failed: "Open" };
+  const verb: Record<InboxItem["kind"], string> = { pr_review: "Review", ci_failing: "Open", blocked: "Answer", failed: "See why" };
   const who = scope.kind === "person" ? (scope.login === viewer ? "you" : scope.login) : scope.kind === "team" ? "this team" : "the org";
   const needN = needs.length + back.length;
   const sub = `${needN === 0 ? "Nothing needs you" : `${needN} task${needN === 1 ? " needs" : "s need"} a person`}. ${working.length === 0 ? `No agents are working for ${who} right now.` : `${working.length} agent${working.length === 1 ? " is" : "s are"} working for ${who} and ${working.length === 1 ? "doesn't" : "don't"} need you.`}${teamReviews.length ? ` ${teamReviews.length} of your team's PR${teamReviews.length === 1 ? " waits" : "s wait"} for a reviewer.` : ""}`;
@@ -220,7 +220,11 @@ export function InboxPage({ facts, now, viewer, scope, teamReviews = [] }: { fac
       <Sec title="Needs you" n={needs.length + back.length} />
       {needs.length + back.length === 0 ? <Rows><Empty title="All clear.">Reviews, questions from agents and failures land here.</Empty></Rows> : (
         <Rows>
-          {needs.map((n) => <TaskRow f={n.facts} now={now} needs note={n.kind === "blocked" ? `Blocked. ${n.detail}` : n.kind === "pr_review" ? `Review the PR. ${n.facts.task.evidence.length ? `Evidence: ${evidenceSummary(n.facts.task)}.` : "No evidence attached."}${n.facts.task.risk ? ` Merge risk ${n.facts.task.risk.level}.` : ""}` : n.detail} action={<a class="btn" style="height:28px" href={`/tasks/${n.facts.task.id}`}>{verb[n.kind]}</a>} />)}
+          {needs.map((n) => <TaskRow f={n.facts} now={now} needs note={n.kind === "blocked" ? `Blocked. ${n.detail}` : n.kind === "pr_review" ? `Review the PR. ${n.facts.task.evidence.length ? `Evidence: ${evidenceSummary(n.facts.task)}.` : "No evidence attached."}${n.facts.task.risk ? ` Merge risk ${n.facts.task.risk.level}.` : ""}` : n.detail} action={
+                n.kind === "failed" && n.facts.lastErrorKind !== "setup" ? (
+                  <form method="post" action={`/tasks/${n.facts.task.id}/retry`} style="margin:0"><input type="hidden" name="back" value="inbox" /><button class="btn" style="height:28px" type="submit">Retry</button></form>
+                ) : <a class="btn" style="height:28px" href={`/tasks/${n.facts.task.id}`}>{verb[n.kind]}</a>
+              } />)}
           {back.map((f) => <TaskRow f={f} now={now} needs action={<a class="btn" style="height:28px" href={`/tasks/${f.task.id}`}>See why</a>} />)}
         </Rows>
       )}

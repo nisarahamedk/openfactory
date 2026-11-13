@@ -244,3 +244,85 @@ describe("task job", () => {
     await jobs.close();
   }, 30_000);
 });
+
+describe("recovery", () => {
+  async function setup(w: ReturnType<typeof world>, preflight?: () => Promise<Array<{ name: string; ok: boolean; detail: string; fix: string | null }>>) {
+    const ledger = new Ledger(drizzle(new PGlite()));
+    await ledger.migrate();
+    const faux = fauxProvider({ provider: "foreman-faux", models: [{ id: "haiku" }] });
+    faux.setResponses(Array.from({ length: 10 }, () => fauxAssistantMessage("On it.")));
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const jobs = new TaskJobs(
+      {
+        ledger,
+        rules: { label: "factory", botLogins: [], maxTaskUsd: 10, maxReviewRounds: 3 },
+        chat: w.chat,
+        codeForge: w.codeForge,
+        agent: w.agent,
+        workspace: w.workspace,
+        environment: w.environment,
+        modelKeys: null,
+        evidence: { put: async (t, name) => ({ url: `https://factory/evidence/${t}/${name}` }) },
+        scorers: factScorers,
+        sinks: [],
+        ...(preflight ? { preflight } : {}),
+        config: { baseBranch: "main", workerImage: null, agentEnv: {}, maxNudges: 1, branchPrefix: "factory/", retryDelaysMs: [1, 1] },
+        log: () => {},
+      },
+      { dataDir: mkdtempSync(join(tmpdir(), "jobs-")), models, foremanModel: { provider: "foreman-faux", modelId: "haiku" }, factoryVersion: () => "fv_test", harnessInfo: { name: "fake-agent", model: "fake" } },
+    );
+    const labeled: Signal = { repo, at: new Date().toISOString(), actor: { login: "nisar", isBot: false }, id: "r1", type: "issue_labeled", issueNumber: 9, label: "factory", title: "Fix it", body: "Please", labels: ["factory"] };
+    return { ledger, jobs, labeled };
+  }
+
+  it("retries a passing failure by itself and carries on", async () => {
+    const w = world();
+    let calls = 0;
+    const create = w.environment.create;
+    w.environment.create = async (i) => {
+      if (calls++ === 0) throw new Error("fetch failed: ECONNRESET");
+      return create(i);
+    };
+    const { ledger, jobs, labeled } = await setup(w);
+    const taskId = (await jobs.handle(labeled)).taskId!;
+    await jobs.idle(taskId);
+    expect((await ledger.getTask(taskId))!.status).toBe("awaiting_review");
+    const retries = (await ledger.events(taskId)).filter((e) => e.type === "retrying");
+    expect(retries.map((e) => e.data)).toMatchObject([{ stage: "preparing environment", attempt: 1, of: 2 }]);
+    await jobs.close();
+  }, 30_000);
+
+  it("stops a task on a setup problem before making anything, then a person's Retry finishes it", async () => {
+    const w = world();
+    let made = 0;
+    const create = w.environment.create;
+    w.environment.create = async (i) => {
+      made++;
+      return create(i);
+    };
+    let broken = true;
+    const { ledger, jobs, labeled } = await setup(w, async () =>
+      broken ? [{ name: "model fake", ok: false, detail: "the gateway key can't use this model", fix: "Add fake to the key's models." }] : [],
+    );
+    const taskId = (await jobs.handle(labeled)).taskId!;
+    await jobs.idle(taskId);
+    let r = (await ledger.getTask(taskId))!;
+    expect(r.status).toBe("failed");
+    expect(made).toBe(0);
+    const err = (await ledger.events(taskId)).find((e) => e.type === "error")!;
+    expect(err.data).toMatchObject({ kind: "setup", fix: "Add fake to the key's models.", stage: "preparing environment" });
+    expect(w.posts.some((p) => p.to === 9 && p.md.includes("setup problem") && p.md.includes("Add fake to the key's models."))).toBe(true);
+
+    broken = false;
+    r = (await jobs.retry(taskId, "nisar"))!;
+    await jobs.idle(taskId);
+    r = (await ledger.getTask(taskId))!;
+    expect(r.status).toBe("awaiting_review");
+    expect((await ledger.events(taskId)).some((e) => e.type === "retry_requested" && e.data.by === "nisar")).toBe(true);
+    // Retrying a task that isn't failed changes nothing.
+    expect((await jobs.retry(taskId, "nisar"))!.status).toBe("awaiting_review");
+    expect(await jobs.retry("task_nope" as never, "nisar")).toBeNull();
+    await jobs.close();
+  }, 30_000);
+});
