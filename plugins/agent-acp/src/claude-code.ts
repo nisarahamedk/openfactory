@@ -33,7 +33,8 @@ export function claudeCodeHarness(options: ClaudeCodeOptions): AcpHarness {
     command: options.command ?? ["claude-agent-acp"],
     modelEnv,
     env: {
-      ANTHROPIC_BASE_URL: options.modelProxyUrl,
+      // Anthropic clients append /v1/messages; an OpenAI-style proxy URL ends in /v1.
+      ANTHROPIC_BASE_URL: options.modelProxyUrl.replace(/\/+$/, "").replace(/\/v1$/, ""),
       ANTHROPIC_API_KEY: options.modelProxyKey,
       ...modelEnv(options.model),
       ...(options.configDir === null ? {} : { CLAUDE_CONFIG_DIR: options.configDir }),

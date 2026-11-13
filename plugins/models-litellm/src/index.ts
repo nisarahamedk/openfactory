@@ -61,7 +61,7 @@ export class LiteLlmGateway implements ModelGateway {
       throw new LiteLlmRequestFailed("/key/info", info.status, await info.text());
     }
     const { baseUrl, key: keyName } = this.options.envNames;
-    return baseUrl === null ? { [keyName]: key } : { [baseUrl]: this.options.agentBaseUrl, [keyName]: key };
+    return baseUrl === null ? { [keyName]: key } : { [baseUrl]: anthropicBase(this.options.agentBaseUrl), [keyName]: key };
   }
 
   async spend(taskId: TaskId): Promise<{ usd: number } | null> {
@@ -100,6 +100,14 @@ export class LiteLlmGateway implements ModelGateway {
     const res = await this.options.fetch(this.url(path), { method: "POST", headers: this.headers(), body: JSON.stringify(body) });
     if (!res.ok) throw new LiteLlmRequestFailed(path, res.status, await res.text());
   }
+}
+
+/**
+ * Anthropic clients append /v1/messages to their base URL, while OpenAI-style proxy URLs end in /v1.
+ * Strip a trailing /v1 so one MODEL_PROXY_URL serves both (otherwise the agent calls /v1/v1/messages).
+ */
+export function anthropicBase(url: string): string {
+  return url.replace(/\/+$/, "").replace(/\/v1$/, "");
 }
 
 type Env = Record<string, string | undefined>;
