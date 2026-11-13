@@ -51,6 +51,8 @@ describe("decide", () => {
     expect(decide(task({ people: { comments: 0, reviewRounds: 3 } }), review, cfg).kind).toBe("foreman_reply");
     expect(decide(task({ usage: { inputTokens: 0, outputTokens: 0, costUsd: 9 } }), review, cfg).kind).toBe("foreman_reply");
     expect(decide(task({ status: "merged" }), review, cfg).kind).toBe("ignore");
+    expect(decide(task({ status: "failed" }), review, cfg).kind).toBe("retry");
+    expect(decide(task({ status: "failed" }), issueComment, cfg).kind).toBe("retry");
   });
 
   it("finalizes on merge and close", () => {

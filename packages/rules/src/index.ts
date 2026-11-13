@@ -10,6 +10,7 @@
  *  - A PR goes to review only with evidence that names its head commit.
  *  - Humans merge; the factory never merges.
  *  - Budgets: per-task spend and review rounds are capped.
+ *  - A failed task is retried when a person comments on it.
  */
 import type { Signal, TaskRecord, TaskStatus } from "@openfactory/contracts";
 
@@ -26,6 +27,7 @@ export type Action =
   | { kind: "foreman_reply"; body: string }
   | { kind: "finalize"; outcome: "merged" | "closed"; mergeSha?: string }
   | { kind: "record_ci" }
+  | { kind: "retry"; body: string }
   | { kind: "ignore"; reason: string };
 
 const TERMINAL: TaskStatus[] = ["merged", "closed", "failed"];
@@ -51,6 +53,7 @@ export function decide(task: TaskRecord | null, signal: Signal, cfg: RulesConfig
 
     case "issue_comment":
       if (!task) return { kind: "ignore", reason: "no task" };
+      if (task.status === "failed") return { kind: "retry", body: signal.body };
       if (isTerminal(task.status)) return { kind: "ignore", reason: `task ${task.status}` };
       // A comment on the PR conversation tab arrives as an issue comment on the PR number.
       if (task.pr && signal.issueNumber === task.pr.number) return reviewOrStop(task, signal.body, cfg);
@@ -58,6 +61,7 @@ export function decide(task: TaskRecord | null, signal: Signal, cfg: RulesConfig
 
     case "pr_review_comment":
       if (!task) return { kind: "ignore", reason: "no task" };
+      if (task.status === "failed") return { kind: "retry", body: signal.body };
       if (isTerminal(task.status)) return { kind: "ignore", reason: `task ${task.status}` };
       return reviewOrStop(task, signal.body, cfg);
 
