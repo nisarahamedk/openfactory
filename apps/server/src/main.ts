@@ -25,7 +25,7 @@ const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ a
 
 async function main() {
   const cfg = loadConfig(process.env);
-  const { ledger, app: store, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
+  const { ledger, app: store, jobs: jobLog, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
 
   // A GitHub App when configured (scoped, 1-hour tokens per task), else the PAT.
   const ghApp = githubAppFromEnv(process.env);
@@ -155,6 +155,8 @@ async function main() {
     jobDeps,
     {
       dataDir: cfg.DATA_DIR,
+      // Tasks that already have a SQLite file finish on it; new ones keep their state in Postgres.
+      jobLog: cfg.JOB_STATE === "postgres" ? jobLog : null,
       models,
       foremanModel: { provider: FOREMAN_PROVIDER, modelId: cfg.FOREMAN_MODEL },
       factoryVersion: () => cfg.FACTORY_VERSION,
@@ -175,6 +177,7 @@ async function main() {
     },
   );
   log("resumed tasks", await jobs.resumeAll());
+  jobs.startSweeping();
 
   // Late outcomes: reverts, follow-up fixes, incidents and deploys for tasks merged in the last windowDays.
   const outcomeCfg = loadOutcomeConfig(pluginEnv, cfg.FACTORY_FILE);

@@ -1,18 +1,27 @@
 /**
- * TaskJobs: one pi-durable Harness per factory task (pi-durable has one writer
- * per storage, so each task gets its own SQLite file). The root conversation of
- * that Harness is the task's foreman; the job's own durable tasks run beside it.
+ * TaskJobs: one pi-durable Harness per factory task (pi-durable has one writer per storage, so each task gets its
+ * own storage). The root conversation of that Harness is the task's foreman; the job's own durable tasks run beside it.
+ *
+ * Where a job keeps its state: in Postgres when `jobLog` is set (the commit log in of_job_commits, see pg-storage.ts),
+ * else in a SQLite file per task under dataDir. A task that already has a SQLite file keeps using it, so switching
+ * an existing factory to Postgres needs no migration: old tasks finish on their files, new ones start in Postgres.
+ *
+ * With Postgres, a server runs a task's job only while it holds the task's lease (renewed every leaseMs/3). If a
+ * server dies, its leases expire and the sweep on another server (or on the restarted one) takes those tasks over.
  */
-import { mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import { createRegistry, defineExtension, Harness, type Conversation, type TaskId as PdTaskId } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { RepoRef, Signal, TaskId, TaskRecord } from "@openfactory/contracts";
+import type { JobLog, Lease } from "@openfactory/ledger";
 import { askForeman, FOREMAN_INSTRUCTIONS } from "@openfactory/foreman";
 import { decide, isTerminal, pickModel, pickVersion, planScope, type Action, type ModelRouting, type Rollout } from "@openfactory/rules";
 import { issueTarget, type JobDeps } from "./deps.js";
+import { PostgresJobStorage } from "./pg-storage.js";
 import { describeError, scoreAndExport, sleepAll } from "./steps.js";
 import { jobTasks, type JobTasks } from "./tasks.js";
 
@@ -32,9 +41,23 @@ export type TaskJobsOptions = {
   versionModels?: Record<string, ModelRouting>;
   /** Every repo the factory may work in; an issue that names one of them adds it to the task's scope. */
   knownRepos?: RepoRef[];
+  /** Keep job state in Postgres (and run each task under a lease) instead of SQLite files. */
+  jobLog?: JobLog | null;
+  /** This server's name on leases. Default: host, pid and a random suffix. */
+  holder?: string;
+  /** How long a lease lasts without renewal; a dead server's tasks move after this. Default 60 s. */
+  leaseMs?: number;
 };
 
-type Open = { h: Harness; root: Conversation };
+type Open = { h: Harness; root: Conversation; lease?: Lease; renew?: ReturnType<typeof setInterval> };
+
+/** Another factory server is running this task's job right now. */
+export class TaskBusy extends Error {
+  constructor(readonly taskId: TaskId) {
+    super(`another factory server is running task ${taskId}; try again in a minute`);
+    this.name = "TaskBusy";
+  }
+}
 
 const JOB_KINDS = new Set(["factory.intake", "factory.review", "factory.finalize"]);
 
@@ -49,6 +72,9 @@ export class TaskJobs {
   private readonly open = new Map<TaskId, Promise<Open>>();
   private readonly tasks: JobTasks;
   private readonly extension;
+  private readonly holder: string;
+  private readonly leaseMs: number;
+  private sweeper: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly deps: JobDeps,
@@ -57,6 +83,32 @@ export class TaskJobs {
     this.tasks = jobTasks(deps);
     this.extension = defineExtension({ name: "factory", tasks: [this.tasks.Intake, this.tasks.Review, this.tasks.Finalize] });
     mkdirSync(join(opts.dataDir, "tasks"), { recursive: true });
+    this.holder = opts.holder ?? `${hostname()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+    this.leaseMs = opts.leaseMs ?? 60_000;
+  }
+
+  private sqlitePath(taskId: TaskId): string {
+    return join(this.opts.dataDir, "tasks", `${taskId}.sqlite`);
+  }
+
+  /** Open a task's storage: its SQLite file if it has one (or there is no Postgres), else Postgres under a lease. */
+  private async storage(taskId: TaskId): Promise<{ storage: Parameters<typeof Harness.open>[0]; lease?: Lease }> {
+    const log = this.opts.jobLog;
+    if (!log || existsSync(this.sqlitePath(taskId))) return { storage: await openNodeSqliteStorage(this.sqlitePath(taskId)) };
+    const lease = await log.acquire(taskId, this.holder, this.leaseMs);
+    if (!lease) throw new TaskBusy(taskId);
+    return { storage: await PostgresJobStorage.open(log, lease, ctx), lease };
+  }
+
+  /** Close a task's job here (lease lost, or shutting down). */
+  private async drop(taskId: TaskId, release: boolean): Promise<void> {
+    const p = this.open.get(taskId);
+    this.open.delete(taskId);
+    const o = await p?.catch(() => null);
+    if (!o) return;
+    if (o.renew) clearInterval(o.renew);
+    await o.h.close(ctx).catch(() => {});
+    if (release && o.lease) await this.opts.jobLog?.release(o.lease).catch(() => {});
   }
 
   private harness(taskId: TaskId): Promise<Open> {
@@ -65,7 +117,7 @@ export class TaskJobs {
       p = (async () => {
         const registry = createRegistry();
         registry.install(this.extension);
-        const storage = await openNodeSqliteStorage(join(this.opts.dataDir, "tasks", `${taskId}.sqlite`));
+        const { storage, lease } = await this.storage(taskId);
         const h = await Harness.open(
           storage,
           {
@@ -79,7 +131,21 @@ export class TaskJobs {
           agent: { model: this.opts.foremanModel, instructions: FOREMAN_INSTRUCTIONS, maxTurns: 4 },
         });
         h.resume();
-        return { h, root };
+        const o: Open = { h, root, lease };
+        if (lease) {
+          o.renew = setInterval(() => {
+            void this.opts.jobLog!.renew(lease, this.leaseMs).then(
+              (ok) => {
+                if (ok) return;
+                this.deps.log("job lease lost; stopping the job here", { taskId });
+                void this.drop(taskId, false);
+              },
+              (e) => this.deps.log("job lease renewal failed", { taskId, error: describeError(e) }),
+            );
+          }, Math.max(1000, Math.floor(this.leaseMs / 3)));
+          o.renew.unref?.();
+        }
+        return o;
       })();
       this.open.set(taskId, p);
       p.catch(() => this.open.delete(taskId));
@@ -101,12 +167,19 @@ export class TaskJobs {
     let resumed = 0;
     let rebuilt = 0;
     for (const t of live) {
-      if (files.has(`${t.id}.sqlite`)) {
-        await this.harness(t.id);
-        resumed++;
+      if (this.open.has(t.id)) continue;
+      if (files.has(`${t.id}.sqlite`) || (await this.opts.jobLog?.has(t.id))) {
+        try {
+          await this.harness(t.id);
+          resumed++;
+        } catch (e) {
+          if (!(e instanceof TaskBusy)) throw e;
+        }
         continue;
       }
       if (!MID_WORK.has(t.status)) continue;
+      // Take the lease first, so two servers starting together don't both rebuild it.
+      if (this.opts.jobLog && !(await this.opts.jobLog.acquire(t.id, this.holder, this.leaseMs))) continue;
       await this.deps.ledger.append(t.id, "job_rebuilt", { status: t.status, reason: "the task's job state was missing at start-up" });
       if (!t.pr) await this.create(t.id, (x) => ({ def: x.Intake, input: { taskId: t.id } }));
       else
@@ -117,6 +190,33 @@ export class TaskJobs {
       rebuilt++;
     }
     return { resumed, rebuilt };
+  }
+
+  /**
+   * With Postgres: every lease period, pick up tasks whose server went away (their leases expired). Call once at
+   * start-up, after resumeAll.
+   */
+  startSweeping(): void {
+    if (!this.opts.jobLog || this.sweeper) return;
+    this.sweeper = setInterval(() => {
+      void this.resumeAll().then(
+        (r) => (r.resumed || r.rebuilt ? this.deps.log("took over tasks from another server", r) : undefined),
+        (e) => this.deps.log("task sweep failed", { error: describeError(e) }),
+      );
+    }, this.leaseMs);
+    this.sweeper.unref?.();
+  }
+
+  /** Whether this server may act on a task's job now (always, without Postgres). */
+  private async mayRun(taskId: TaskId): Promise<boolean> {
+    if (!this.opts.jobLog || this.open.has(taskId) || existsSync(this.sqlitePath(taskId))) return true;
+    try {
+      await this.harness(taskId);
+      return true;
+    } catch (e) {
+      if (e instanceof TaskBusy) return false;
+      throw e;
+    }
   }
 
   private async liveJobTasks(taskId: TaskId): Promise<PdTaskId[]> {
@@ -155,6 +255,11 @@ export class TaskJobs {
     const task = await this.taskFor(signal);
     const action = decide(task, signal, this.deps.rules);
     this.deps.log("signal", { type: signal.type, id: signal.id, action: action.kind, taskId: task?.id });
+    // Leave a task another server runs to that server (it sees the same signal); recording it here would mark it seen.
+    if (task && action.kind !== "ignore" && action.kind !== "record_ci" && !(await this.mayRun(task.id))) {
+      this.deps.log("signal left to the server running the task", { taskId: task.id, id: signal.id });
+      return { kind: "ignore", reason: "another factory server runs this task" } as Action;
+    }
     const l = this.deps.ledger;
     switch (action.kind) {
       case "ignore":
@@ -316,10 +421,8 @@ export class TaskJobs {
   }
 
   async close(): Promise<void> {
-    for (const p of this.open.values()) {
-      const { h } = await p.catch(() => ({ h: null as Harness | null }));
-      await h?.close(ctx).catch(() => {});
-    }
-    this.open.clear();
+    if (this.sweeper) clearInterval(this.sweeper);
+    this.sweeper = null;
+    for (const id of [...this.open.keys()]) await this.drop(id, true);
   }
 }

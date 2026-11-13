@@ -64,6 +64,9 @@ limits:
   maxNudges: 2
 
 server:
+  # Where task jobs keep their state: postgres (a task can move to another server) or files (SQLite on the PVC).
+  # Tasks started before the switch finish on their files. Still 1 replica: evidence and benchmarks are on the PVC.
+  jobState: postgres
   resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
   extraEnv: []           # [{ name, value }] or valueFrom; see apps/server/src/config.ts
   nodeSelector: {}

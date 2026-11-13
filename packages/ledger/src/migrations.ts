@@ -26,6 +26,24 @@ CREATE TABLE IF NOT EXISTS of_cursors (
   updated_at timestamptz NOT NULL
 );`,
   },
+  {
+    version: 4,
+    name: "durable job state in Postgres (commit log and per-task leases)",
+    sql: `
+CREATE TABLE IF NOT EXISTS of_job_commits (
+  task_id text NOT NULL,
+  seq bigint NOT NULL,
+  writes text NOT NULL,
+  at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (task_id, seq)
+);
+CREATE TABLE IF NOT EXISTS of_job_leases (
+  task_id text PRIMARY KEY,
+  holder text NOT NULL,
+  epoch bigint NOT NULL,
+  expires_at timestamptz NOT NULL
+);`,
+  },
 ];
 
 const LOCK_ID = 7_241_001; // any constant; shared by every factory server on this database
