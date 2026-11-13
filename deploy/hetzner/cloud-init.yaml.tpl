@@ -3,7 +3,9 @@
 # have no SSH path (cloud sessions cannot reach port 22), so the only way in
 # afterwards is the Kubernetes API, published on https://k8s.<ip>.sslip.io
 # behind Traefik with a Let's Encrypt certificate and a static bearer token.
-# __KUBE_TOKEN__ is substituted by create-vm.sh from the vault; never commit it.
+# __KUBE_TOKEN__ is substituted by create-vm.sh; never commit it. user-data stays readable via the
+# Hetzner API and the metadata service (blocked for pods below), so ROTATE the token after boot:
+# rewrite /etc/rancher/k3s/tokens.csv through a privileged pod and restart k3s (see INFRA.md).
 package_update: true
 packages: [curl, jq, open-iscsi, certbot]
 write_files:
@@ -16,6 +18,31 @@ write_files:
     permissions: "0600"
     content: |
       __KUBE_TOKEN__,factory-admin,factory-admin,"system:masters"
+  - path: /var/lib/rancher/k3s/server/psa.yaml
+    content: |
+      # Every namespace (task envs, workspaces) is Pod Security "baseline": no privileged,
+      # hostNetwork, hostPID or hostPath pods. Only system namespaces and the image builder are exempt.
+      apiVersion: apiserver.config.k8s.io/v1
+      kind: AdmissionConfiguration
+      plugins:
+        - name: PodSecurity
+          configuration:
+            apiVersion: pod-security.admission.config.k8s.io/v1
+            kind: PodSecurityConfiguration
+            defaults: { enforce: baseline, enforce-version: latest, warn: baseline, warn-version: latest }
+            exemptions: { namespaces: [kube-system, factory-system] }
+  - path: /etc/systemd/system/factory-block-metadata.service
+    content: |
+      # The metadata service serves this file (user-data) to anything that asks; pods must not.
+      [Unit]
+      Description=Block pods from the cloud metadata service
+      After=network-online.target
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/bin/sh -c "iptables -t mangle -C PREROUTING -s 10.42.0.0/16 -d 169.254.169.254 -j DROP 2>/dev/null || iptables -t mangle -I PREROUTING -s 10.42.0.0/16 -d 169.254.169.254 -j DROP"
+      [Install]
+      WantedBy=multi-user.target
   - path: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
     content: |
       apiVersion: helm.cattle.io/v1
@@ -83,7 +110,8 @@ write_files:
         certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email \
           --cert-name factory "${args[@]}" && break; sleep 20; done
       curl -sfL https://get.k3s.io | INSTALL_K3S_CHANNEL=stable INSTALL_K3S_EXEC="server \
-        --tls-san ${HOST} --write-kubeconfig-mode 600 \
+        --tls-san ${HOST} --write-kubeconfig-mode 600 --secrets-encryption \
+        --kube-apiserver-arg=admission-control-config-file=/var/lib/rancher/k3s/server/psa.yaml \
         --kube-apiserver-arg=token-auth-file=/etc/rancher/k3s/tokens.csv" sh -
       until k3s kubectl get --raw /readyz >/dev/null 2>&1; do sleep 3; done
       if [ -f /etc/letsencrypt/live/factory/fullchain.pem ]; then
@@ -146,5 +174,6 @@ write_files:
       YAML
       echo "factory-boot done for ${HOST}" > /var/log/factory-boot.done
 runcmd:
+  - [systemctl, enable, --now, factory-block-metadata.service]
   - [systemctl, enable, --now, factory-debug.service]
   - [bash, -c, "/usr/local/bin/factory-boot.sh > /var/log/factory-boot.log 2>&1"]

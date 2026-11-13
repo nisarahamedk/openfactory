@@ -22,7 +22,10 @@ fi
 for s in dxfake:DXFAKE_TOKEN dashboard:DASHBOARD_PASSWORD factory-api:FACTORY_API_TOKEN; do
   has "${s%%:*}" || kubectl -n factory create secret generic "${s%%:*}" --from-literal="${s##*:}=$(rand)" >/dev/null
 done
-kubectl apply -f "$root/deploy/platform/postgres.yaml" -f "$root/deploy/platform/litellm.yaml"
+kubectl apply -f "$root/deploy/platform/postgres.yaml" -f "$root/deploy/platform/litellm.yaml" \
+  -f "$root/deploy/platform/network-policies.yaml"
+# The boot-time debug page is only for when the API isn't reachable yet; take it down now.
+kubectl -n kube-system delete pod/debug-page svc/debug-page ingressroute/debug-page --ignore-not-found >/dev/null
 kubectl -n factory rollout status statefulset/postgres --timeout=300s
 kubectl -n factory rollout status deploy/litellm --timeout=600s
 # The factory's own key: hard $60 budget on top of the proxy-wide cap.

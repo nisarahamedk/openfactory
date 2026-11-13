@@ -1,0 +1,41 @@
+# Who may connect to what. k3s enforces NetworkPolicy (embedded kube-router).
+# factory: only its own pods, Traefik (kube-system) and the sandboxes' model calls get in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny-ingress, namespace: factory }
+spec: { podSelector: {}, policyTypes: [Ingress] }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-same-namespace, namespace: factory }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress: [{ from: [{ podSelector: {} }] }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-ingress-controller, namespace: factory }
+spec:
+  podSelector:
+    matchExpressions: [{ key: app, operator: In, values: [openfactory, dashboard, dxfake] }]
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
+---
+# Sandboxes reach the model proxy (and nothing else in this namespace: not Postgres, not the server).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-sandboxes-to-litellm, namespace: factory }
+spec:
+  podSelector: { matchLabels: { app: litellm } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: factory-workspaces } } }]
+      ports: [{ port: 4000 }]
+---
+# Sandboxes take no inbound connections (the server drives them through the Kubernetes API).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny-ingress, namespace: factory-workspaces }
+spec: { podSelector: {}, policyTypes: [Ingress] }
