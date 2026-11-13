@@ -8,6 +8,7 @@
  * carries FACTORY_MARKER and the rules never react to it.
  */
 import { verify } from "@octokit/webhooks-methods";
+import { GitHubOutcomeSource } from "./outcomes.js";
 import {
   defineProvider,
   type ProviderContext,
@@ -307,5 +308,8 @@ export const provider = defineProvider({
         lookbackMs: Number(ctx.options.lookbackMs ?? ctx.env.POLL_LOOKBACK_MS ?? 15 * 60_000),
         log: ctx.log,
       }),
+    outcomes: (ctx) => new GitHubOutcomeSource(clientFrom(ctx).gh, { followUpDays: Number(ctx.options.followUpDays ?? 14) }),
   },
 });
+
+export { GitHubOutcomeSource, isRevertOf, mentions, type GitHubOutcomeOptions } from "./outcomes.js";

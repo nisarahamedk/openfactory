@@ -135,12 +135,37 @@ export function stageTimeScorer(stage: TaskStatus): Scorer {
 const STAGES: TaskStatus[] = ["received", "preparing", "working", "awaiting_review", "iterating"];
 
 /** Every built-in fact scorer, in display order. */
+/** Days after the merge that a change must survive to count as having held up. */
+export const HELD_UP_DAYS = 30;
+const CAME_BACK = new Set(["reverted", "hotfix", "incident_linked"]);
+
+/**
+ * 1 if the merged change went HELD_UP_DAYS with no revert, follow-up fix or linked incident;
+ * 0 as soon as one arrives inside that window; null while the window is still open.
+ * Rework (a later change to the same files that isn't a fix) doesn't count against it.
+ */
+export const heldUpScorer: Scorer = {
+  name: "facts.held_up",
+  version: "1",
+  score(record, _events, now) {
+    if (record.status !== "merged") return null;
+    const merged = record.outcomes.find((o) => o.kind === "merged");
+    if (!merged) return null;
+    const end = Date.parse(merged.at) + HELD_UP_DAYS * 86_400_000;
+    const bad = record.outcomes.filter((o) => CAME_BACK.has(o.kind) && Date.parse(o.at) <= end).sort((a, b) => a.at.localeCompare(b.at))[0];
+    if (bad) return score(this.name, this.version, now, 0, bad.kind, bad.detail);
+    if (Date.parse(now) < end) return null;
+    return score(this.name, this.version, now, 1, "held up", `nothing came back in the ${HELD_UP_DAYS} days after the merge`);
+  },
+};
+
 export const factScorers: Scorer[] = [
   mergedScorer,
   reviewRoundsScorer,
   ciFirstPassScorer,
   costScorer,
   leadTimeScorer,
+  heldUpScorer,
   ...STAGES.map(stageTimeScorer),
 ];
 
@@ -160,6 +185,7 @@ export const scorerDocs: Record<string, { title: string; measures: string; kind:
   "facts.review_rounds": { title: "Review rounds", measures: "Agent turns started by PR review feedback. Fewer means the first version was closer to right.", kind: "count" },
   "facts.ci_first_pass": { title: "CI green on first push", measures: "1 if every check passed on the PR's first commit.", kind: "pass_fail" },
   "facts.cost_usd": { title: "Model cost", measures: "Model spend for the task, in USD, through the factory's model proxy.", kind: "usd" },
+  "facts.held_up": { title: "Held up 30 days", measures: "1 if nothing came back in the 30 days after the merge (revert, follow-up fix or linked incident), 0 if something did.", kind: "pass_fail" },
   "facts.lead_time_s": { title: "Ask to done", measures: "Time from the task being received to merged, closed or failed.", kind: "seconds" },
   ...Object.fromEntries(
     STAGES.map((s) => [`facts.stage_s.${s}`, { title: `Time in ${s.replace("_", " ")}`, measures: `Total time the task spent in "${s}".`, kind: "seconds" as const }]),

@@ -77,7 +77,7 @@ export type Score = z.infer<typeof Score>;
 
 /** Something that happened after the work: revert, incident, rework, follow-up fix. */
 export const Outcome = z.object({
-  kind: z.enum(["merged", "reverted", "incident_linked", "hotfix", "rework", "closed_unmerged"]),
+  kind: z.enum(["merged", "reverted", "incident_linked", "hotfix", "rework", "deployed", "closed_unmerged"]),
   source: z.string(), // e.g. "github", "dxfake"
   detail: z.string(),
   at: z.string(), // when it happened
@@ -355,6 +355,39 @@ export interface MetricsSink {
   writeTasks(records: TaskRecord[]): Promise<void>;
 }
 
+/** One late outcome for one task, as an OutcomeSource reports it. */
+export interface FoundOutcome {
+  taskId: TaskId;
+  outcome: Outcome;
+  /** Stable id of the thing found (revert PR, incident id, deploy id). The ledger dedupes on source + task + kind + ref. */
+  ref: string;
+}
+
+/**
+ * What happened after the merge: reverts, follow-up fixes, incidents, deploys (GitHub, an incident tool,
+ * a metrics platform). Polled on a schedule with every task merged inside the watch window, so a source
+ * can fetch once per repo. Returning something already recorded is fine: the ledger dedupes by `ref`.
+ */
+export interface OutcomeSource {
+  readonly name: string;
+  poll(merged: MergedTask[], now: string): Promise<FoundOutcome[]>;
+}
+
+/** A merged task with the facts outcome sources match on. */
+export interface MergedTask {
+  record: TaskRecord;
+  mergeSha: string | null;
+  mergedAt: string;
+}
+
+/** The merge facts of a task, from its `merged` outcome (detail "merge <sha>"). Null when it isn't merged. */
+export function mergeOf(record: TaskRecord): MergedTask | null {
+  const m = record.outcomes.find((o) => o.kind === "merged");
+  if (!m) return null;
+  const sha = /\bmerge ([0-9a-f]{7,40})\b/.exec(m.detail)?.[1] ?? null;
+  return { record, mergeSha: sha, mergedAt: m.at };
+}
+
 /** Read access to the ledger, for scorers, the dashboard and benchmarks. */
 export interface LedgerReader {
   getTask(id: TaskId): Promise<TaskRecord | null>;
@@ -379,6 +412,8 @@ export type Abstractions = {
   modelGateway: ModelGateway;
   secrets: Secrets;
   evidence: EvidenceStore;
+  /** Not in ABSTRACTION_KEYS: a factory has several, listed under factory.yaml `outcomes.sources`. */
+  outcomes: OutcomeSource;
 };
 export type AbstractionKey = keyof Abstractions;
 export const ABSTRACTION_KEYS = [

@@ -8,15 +8,15 @@ import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
 import { GitHubClient, parseWebhook } from "@openfactory/github";
-import type { AgentHarness, CodeForge, MetricsSink, Signal, TaskId } from "@openfactory/contracts";
+import type { AgentHarness, CodeForge, MetricsSink, OutcomeSource, Signal, TaskId } from "@openfactory/contracts";
 import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
-import { promptTemplates, TaskJobs } from "@openfactory/task-job";
+import { promptTemplates, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps } from "@openfactory/task-job";
 import { fileEvidenceStore, createApp } from "./app.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
-import { loadModelRouting, loadSelections, ProviderRegistry } from "./registry.js";
+import { loadModelRouting, loadOutcomeConfig, loadSelections, ProviderRegistry } from "./registry.js";
 
 const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), msg, ...fields }));
 
@@ -74,8 +74,7 @@ async function main() {
   if (otlp) sinks.push(otlp);
   const evidence = fileEvidenceStore(join(cfg.DATA_DIR, "evidence"), cfg.PUBLIC_URL);
 
-  const jobs = new TaskJobs(
-    {
+  const jobDeps: JobDeps = {
       ledger,
       rules: { label: cfg.FACTORY_LABEL, botLogins, maxTaskUsd: cfg.MAX_TASK_USD, maxReviewRounds: cfg.MAX_REVIEW_ROUNDS },
       chat,
@@ -95,7 +94,9 @@ async function main() {
       sinks,
       config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/" },
       log,
-    },
+  };
+  const jobs = new TaskJobs(
+    jobDeps,
     {
       dataDir: cfg.DATA_DIR,
       models,
@@ -106,6 +107,25 @@ async function main() {
     },
   );
   log("resumed tasks", { count: await jobs.resumeAll() });
+
+  // Late outcomes: reverts, follow-up fixes, incidents and deploys for tasks merged in the last windowDays.
+  const outcomeCfg = loadOutcomeConfig(pluginEnv, cfg.FACTORY_FILE);
+  const outcomeSources: OutcomeSource[] = [];
+  for (const sel of outcomeCfg?.sources ?? []) {
+    try {
+      outcomeSources.push(await registry.build("outcomes", sel));
+      log("outcome source", { provider: sel.name });
+    } catch (e) {
+      log("outcome source unavailable", { provider: sel.name, error: String(e) });
+    }
+  }
+  const outcomeWatch =
+    outcomeCfg && outcomeSources.length > 0
+      ? watchOutcomes(
+          { ledger, sources: outcomeSources, rescore: (id) => scoreAndExport(jobDeps, id), log },
+          { windowDays: outcomeCfg.windowDays, intervalMs: outcomeCfg.intervalMs },
+        )
+      : null;
 
   // One signal at a time: the job only records and schedules, so this stays quick.
   let chain: Promise<unknown> = Promise.resolve();
@@ -189,6 +209,7 @@ async function main() {
   const shutdown = async () => {
     log("shutting down");
     await poller?.stop();
+    await outcomeWatch?.stop();
     server.close();
     await jobs.close();
     await closeDb();

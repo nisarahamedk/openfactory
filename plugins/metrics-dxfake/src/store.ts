@@ -25,6 +25,8 @@ export const Incident = z.object({
   resolvedAt: z.string().nullable(),
   /** PRs the incident is attributed to, as "owner/name#123". */
   linkedPrs: z.array(z.string()),
+  /** Commits the incident is attributed to (e.g. the deploy that started it). */
+  commitShas: z.array(z.string()).default([]),
 });
 export type Incident = z.infer<typeof Incident>;
 
