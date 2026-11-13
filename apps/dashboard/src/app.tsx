@@ -188,7 +188,13 @@ export function createDashboard(
     // The inbox ignores the period: anything still waiting on a person shows, however old.
     const items = s.facts.filter((x) => matches(x, { ...s.f, days: 0 }, s.teams, s.n));
     const live = items.some((x) => isOpen(x.task.status) && x.task.status !== "awaiting_review");
-    return c.html(await page(c, { title: "Inbox", nav: "inbox", inboxCount: s.inboxCount, refreshSec: live ? 20 : undefined, scope: s.bar() }, <InboxPage facts={items} now={s.n} viewer={viewer} scope={s.f.scope} />));
+    // A person also reviews for their team: teammates' PRs waiting on a reviewer.
+    const scope = s.f.scope;
+    const teamReviews =
+      scope.kind === "person"
+        ? s.facts.filter((x) => x.task.status === "awaiting_review" && x.task.requestedBy !== scope.login && s.teams.some((t) => t.members.some((m) => m.login === scope.login) && t.members.some((m) => m.login === x.task.requestedBy)))
+        : [];
+    return c.html(await page(c, { title: "Inbox", nav: "inbox", inboxCount: s.inboxCount, refreshSec: live ? 20 : undefined, scope: s.bar() }, <InboxPage facts={items} now={s.n} viewer={viewer} scope={scope} teamReviews={teamReviews} />));
   });
   app.get("/activity", (c) => c.redirect("/", 301));
 

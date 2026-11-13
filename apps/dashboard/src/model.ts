@@ -185,6 +185,8 @@ export interface Measure {
   value(fs: readonly TaskFacts[], now: string): { value: number | null; n: number; of: readonly TaskFacts[] };
   /** The state filter that opens the tasks the number counts. */
   opens?: string;
+  /** What `n` counts, e.g. "merged changes". */
+  of: string;
 }
 
 const merged = (fs: readonly TaskFacts[]) => fs.filter((f) => f.task.status === "merged");
@@ -194,6 +196,7 @@ const pct = (a: number, b: number) => (b === 0 ? null : a / b);
 export const MEASURES: Measure[] = [
   {
     id: "merged",
+    of: "tasks",
     label: "Merged changes",
     means: "Tasks whose PR a person merged.",
     unit: "count",
@@ -203,6 +206,7 @@ export const MEASURES: Measure[] = [
   },
   {
     id: "came_back",
+    of: "merged changes",
     label: "Came back after merge",
     means: "Share of merged changes later reverted, fixed again, reworked or linked to an incident.",
     unit: "pct",
@@ -216,6 +220,7 @@ export const MEASURES: Measure[] = [
   },
   {
     id: "held_up",
+    of: "changes merged 30+ days ago",
     label: `Held up ${HELD_UP_DAYS} days`,
     means: `Share of changes merged at least ${HELD_UP_DAYS} days ago with nothing coming back.`,
     unit: "pct",
@@ -229,6 +234,7 @@ export const MEASURES: Measure[] = [
   },
   {
     id: "merge_rate",
+    of: "finished tasks",
     label: "Merge rate",
     means: "Of tasks that finished, the share that merged (the rest failed, were stopped or closed).",
     unit: "pct",
@@ -241,6 +247,7 @@ export const MEASURES: Measure[] = [
   },
   {
     id: "cost_per_merged",
+    of: "merged changes",
     label: "Cost per merged change",
     means: "All model spend in the group, failed tasks included, divided by merged changes.",
     unit: "usd",
@@ -252,6 +259,7 @@ export const MEASURES: Measure[] = [
   },
   {
     id: "cost",
+    of: "tasks",
     label: "Spend",
     means: "Model spend on these tasks.",
     unit: "usd",
@@ -260,6 +268,7 @@ export const MEASURES: Measure[] = [
   },
   {
     id: "review_wait",
+    of: "reviewed PRs",
     label: "Time waiting for review",
     means: "Median hours from the PR opening to the first person reviewing it.",
     unit: "hours",
@@ -271,6 +280,7 @@ export const MEASURES: Measure[] = [
   },
   {
     id: "time_to_merge",
+    of: "merged changes",
     label: "Time to merge",
     means: "Median hours from the ask to the merge.",
     unit: "hours",
@@ -283,6 +293,7 @@ export const MEASURES: Measure[] = [
   },
   {
     id: "review_rounds",
+    of: "merged changes",
     label: "Review rounds",
     means: "Average rounds of review comments a merged change needed.",
     unit: "num",
@@ -295,6 +306,7 @@ export const MEASURES: Measure[] = [
   },
   {
     id: "no_human_commits",
+    of: "merged changes",
     label: "Merged with no human commits",
     means: "Share of merged changes where no person pushed to the PR.",
     unit: "pct",
@@ -308,6 +320,7 @@ export const MEASURES: Measure[] = [
   },
   {
     id: "world_pass",
+    of: "checked PRs",
     label: "OpenWorld check passed",
     means: "Share of checked PRs whose latest head held every invariant over the simulated days.",
     unit: "pct",

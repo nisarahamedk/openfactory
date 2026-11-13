@@ -201,7 +201,7 @@ const Sec = ({ title, n, children }: { title: string; n?: Child; children?: Chil
 
 // ───────────────────────────── inbox ─────────────────────────────
 
-export function InboxPage({ facts, now, viewer, scope }: { facts: TaskFacts[]; now: string; viewer: string | null; scope: Scope }) {
+export function InboxPage({ facts, now, viewer, scope, teamReviews = [] }: { facts: TaskFacts[]; now: string; viewer: string | null; scope: Scope; teamReviews?: TaskFacts[] }) {
   const needs = inbox(facts, now);
   const needIds = new Set(needs.map((n) => n.facts.task.id));
   // Merged work that came back in the last 14 days is worth a look before the next similar task.
@@ -210,9 +210,11 @@ export function InboxPage({ facts, now, viewer, scope }: { facts: TaskFacts[]; n
   const finished = facts.filter((f) => !isOpen(f.task.status) && !needIds.has(f.task.id) && !back.includes(f) && Date.parse(now) - Date.parse(f.task.updatedAt) < 7 * 86_400_000);
   const verb: Record<InboxItem["kind"], string> = { pr_review: "Review", ci_failing: "Open", blocked: "Answer", failed: "Open" };
   const who = scope.kind === "person" ? (scope.login === viewer ? "you" : scope.login) : scope.kind === "team" ? "this team" : "the org";
+  const needN = needs.length + back.length;
+  const sub = `${needN === 0 ? "Nothing needs you" : `${needN} task${needN === 1 ? " needs" : "s need"} a person`}. ${working.length === 0 ? `No agents are working for ${who} right now.` : `${working.length} agent${working.length === 1 ? " is" : "s are"} working for ${who} and ${working.length === 1 ? "doesn't" : "don't"} need you.`}${teamReviews.length ? ` ${teamReviews.length} of your team's PR${teamReviews.length === 1 ? " waits" : "s wait"} for a reviewer.` : ""}`;
   return (
     <>
-      <PageHeader title="Inbox" sub={`${needs.length + back.length === 0 ? "Nothing needs a person" : `${needs.length + back.length} task${needs.length + back.length === 1 ? " needs" : "s need"} a person`}. ${working.length} agent${working.length === 1 ? " is" : "s are"} working for ${who} and ${working.length === 1 ? "doesn't" : "don't"} need you.`}>
+      <PageHeader title="Inbox" sub={sub}>
         <a class="btn primary" href="/tasks/new"><Icon name="plus" />New task</a>
       </PageHeader>
       <Sec title="Needs you" n={needs.length + back.length} />
@@ -222,6 +224,12 @@ export function InboxPage({ facts, now, viewer, scope }: { facts: TaskFacts[]; n
           {back.map((f) => <TaskRow f={f} now={now} needs action={<a class="btn" style="height:28px" href={`/tasks/${f.task.id}`}>See why</a>} />)}
         </Rows>
       )}
+      {teamReviews.length > 0 ? (
+        <>
+          <Sec title="Your team's PRs waiting for review" n={teamReviews.length} />
+          <Rows>{teamReviews.map((f) => <TaskRow f={f} now={now} action={<a class="btn" style="height:28px" href={`/tasks/${f.task.id}`}>Review</a>} />)}</Rows>
+        </>
+      ) : null}
       <Sec title="Agents working" n={working.length} />
       {working.length === 0 ? <Rows><Empty title="No agents running." /></Rows> : <Rows>{working.map((f) => <TaskRow f={f} now={now} />)}</Rows>}
       <Sec title="Recently finished" n="last 7 days" />
@@ -350,7 +358,7 @@ export function InsightsPage({ ex, f, views, viewer, teams, saveForm, now }: { e
                 <h3>{m.label}{ex.by.id !== "none" ? `, by ${ex.by.label.toLowerCase()}` : ""}{ex.split.id !== "none" ? `, split by ${ex.split.label.toLowerCase()}` : ""}</h3>
                 <div class="muted" style="font-size:13px;margin-top:2px">{scopeName}, {f.days ? `last ${f.days} days` : "all time"}. {m.means}</div>
               </div>
-              <div style="text-align:right"><div style="font-size:28px;font-weight:600;font-stretch:118%;line-height:34px"><a href={tasksFor(null, null)}>{formatValue(ex.overall.value, m.unit)}</a></div><div class="muted" style="font-size:12.5px">over {ex.overall.n} task{ex.overall.n === 1 ? "" : "s"}</div></div>
+              <div style="text-align:right"><div style="font-size:28px;font-weight:600;font-stretch:118%;line-height:34px"><a href={tasksFor(null, null)}>{formatValue(ex.overall.value, m.unit)}</a></div><div class="muted" style="font-size:12.5px">over {ex.overall.n} {m.of}</div></div>
             </div>
             {ex.split.id !== "none" ? <div class="legend" style="margin-top:14px">{ex.splits.slice(0, 4).map((s) => <span><i class="sq" style={`background:${splitColor.get(s)}`} />{s}</span>)}{tooFew ? <span class="muted">and {ex.splits.length - 4} more in the table</span> : null}</div> : null}
             {ex.rows.length === 0 ? <Empty title="No tasks in this scope and period." /> : (

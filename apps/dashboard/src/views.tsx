@@ -470,7 +470,7 @@ export function conversation(t: TaskRecord, events: readonly LedgerEvent[], fact
   for (const e of events) {
     const d = e.data;
     if (e.type === "message_received" && typeof d.text === "string") out.push({ who: String(d.author ?? "someone"), role: "wrote in the app", text: d.text, at: e.at, agent: false, url: typeof d.url === "string" ? d.url : null });
-    else if (e.type === "comment_received" && d.isBot !== true) out.push({ who: String(d.author ?? "someone"), role: `commented on the ${d.on === "pr" ? "PR" : "issue"}`, text: "", at: e.at, agent: false, url: d.on === "pr" ? (t.pr?.url ?? null) : t.source.url });
+    else if (e.type === "comment_received" && d.isBot !== true) out.push({ who: String(d.author ?? "someone"), role: `commented on the ${d.on === "pr" ? "PR" : "issue"}`, text: "Left a comment.", at: e.at, agent: false, url: d.on === "pr" ? (t.pr?.url ?? null) : t.source.url });
     else if (e.type === "foreman_replied") out.push({ who: "foreman", role: "replied", text: "Answered on the issue.", at: e.at, agent: true, url: typeof d.url === "string" ? d.url : null });
   }
   // A message from the app is also a comment signal; show it once.
