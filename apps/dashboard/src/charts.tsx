@@ -2,6 +2,7 @@
  * Inline-SVG charts, server-rendered. Hover (crosshair + tooltip) comes from the shell's
  * small script reading `data-points`; without it the chart still reads.
  * Colors are CSS tokens (series-1..3 from a CVD-validated palette), so dark mode works.
+ * See ../DESIGN.md for the chart rules.
  */
 
 export interface Series {
@@ -30,13 +31,13 @@ function ticks(max: number): number[] {
  * Time-series area/line chart over days. `stacked` stacks the series (parts of a whole);
  * otherwise each is drawn from zero. Gaps (null) break the line.
  */
-export function TimeChart({ days, series, format, height = 220, stacked = false, area = true, label, width = 760 }: { days: string[]; series: Series[]; format: (n: number) => string; height?: number; stacked?: boolean; area?: boolean; label: string; width?: number }) {
+export function TimeChart({ days, series, format, height = 220, stacked = false, area = false, label, width = 760, refValue = null, refLabel = "median" }: { days: string[]; series: Series[]; format: (n: number) => string; height?: number; stacked?: boolean; area?: boolean; label: string; width?: number; refValue?: number | null; refLabel?: string }) {
   const W = width;
   const H = height;
   const pad = { l: 56, r: 12, t: 10, b: 28 };
   const n = days.length;
   const tops = days.map((_, i) => (stacked ? series.reduce((s, x) => s + (x.values[i] ?? 0), 0) : Math.max(0, ...series.map((x) => x.values[i] ?? 0))));
-  const yt = ticks(Math.max(0, ...tops));
+  const yt = ticks(Math.max(0, refValue ?? 0, ...tops));
   const yMax = yt.at(-1) ?? 1;
   const x = (i: number) => pad.l + (n <= 1 ? (W - pad.l - pad.r) / 2 : (i * (W - pad.l - pad.r)) / (n - 1));
   const y = (v: number) => pad.t + (H - pad.t - pad.b) * (1 - v / yMax);
@@ -79,13 +80,75 @@ export function TimeChart({ days, series, format, height = 220, stacked = false,
             const bottom = [...run].reverse().map((i) => `${x(i).toFixed(1)},${y(stacked ? lower[i]! : 0).toFixed(1)}`);
             return (
               <g>
-                {area ? <polygon points={[...top, ...bottom].join(" ")} fill={s.color} fill-opacity="0.16" /> : null}
+                {area ? <polygon points={[...top, ...bottom].join(" ")} fill={s.color} fill-opacity="0.08" /> : null}
                 <polyline points={top.join(" ")} fill="none" stroke={s.color} stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
                 {run.length === 1 ? <circle cx={x(run[0]!)} cy={y(upper[run[0]!]!)} r="3.5" fill={s.color} /> : null}
               </g>
             );
           }),
         )}
+        {refValue !== null ? (
+          <g>
+            <line class="refl" x1={pad.l} x2={W - pad.r} y1={y(refValue)} y2={y(refValue)} />
+            <text x={W - pad.r} y={y(refValue) - 6} class="ax" text-anchor="end">{`${refLabel} ${format(refValue)}`}</text>
+          </g>
+        ) : null}
+        <line class="xh" x1="0" x2="0" y1={pad.t} y2={H - pad.b} />
+      </svg>
+      <div class="tip" />
+    </div>
+  );
+}
+
+/**
+ * Counts per day as stacked bars (one per day, segments per series, 2px gaps between
+ * segments, rounded data end). Counts are discrete, so bars, not lines.
+ */
+export function BarChart({ days, series, height = 200, width = 760, label }: { days: string[]; series: Series[]; height?: number; width?: number; label: string }) {
+  const W = width;
+  const H = height;
+  const pad = { l: 36, r: 8, t: 10, b: 28 };
+  const n = days.length;
+  const tops = days.map((_, i) => series.reduce((s, x) => s + (x.values[i] ?? 0), 0));
+  const yt = ticks(Math.max(1, ...tops)).map((t) => Math.round(t)).filter((t, i, a) => a.indexOf(t) === i);
+  const yMax = yt.at(-1) ?? 1;
+  const slot = (W - pad.l - pad.r) / Math.max(1, n);
+  const bw = Math.max(2, Math.min(18, slot * 0.62));
+  const cx = (i: number) => pad.l + slot * (i + 0.5);
+  const y = (v: number) => pad.t + (H - pad.t - pad.b) * (1 - v / yMax);
+  const every = Math.max(1, Math.ceil(n / 7));
+  const points = days.map((d, i) => ({ x: Number(cx(i).toFixed(1)), label: shortDay(d), rows: series.map((s) => ({ name: s.name, color: s.color, value: String(s.values[i] ?? 0) })) }));
+  return (
+    <div class="chart" data-points={JSON.stringify(points)}>
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={label}>
+        {yt.map((t) => (
+          <g>
+            <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} class="gl" />
+            <text x={pad.l - 8} y={y(t) + 4} class="ax" text-anchor="end">{String(t)}</text>
+          </g>
+        ))}
+        {days.map((d, i) => (i % every === 0 || i === n - 1 ? <text x={cx(i)} y={H - 6} class="ax" text-anchor="middle">{shortDay(d)}</text> : null))}
+        {days.map((_, i) => {
+          let base = 0;
+          const segs = series.map((s) => {
+            const v = s.values[i] ?? 0;
+            const seg = { s, from: base, to: base + v };
+            base += v;
+            return seg;
+          }).filter((g) => g.to > g.from);
+          return (
+            <g>
+              {segs.map((g, k) => {
+                const top = y(g.to) + (k > 0 ? 0 : 0);
+                const bottom = y(g.from) - (k > 0 ? 2 : 0);
+                const h = Math.max(0, bottom - top);
+                return k === segs.length - 1
+                  ? <path d={`M${(cx(i) - bw / 2).toFixed(1)},${bottom.toFixed(1)}V${(top + 2).toFixed(1)}q0,-2 2,-2h${(bw - 4).toFixed(1)}q2,0 2,2V${bottom.toFixed(1)}z`} fill={g.s.color} />
+                  : <rect x={(cx(i) - bw / 2).toFixed(1)} y={top.toFixed(1)} width={bw.toFixed(1)} height={h.toFixed(1)} fill={g.s.color} />;
+              })}
+            </g>
+          );
+        })}
         <line class="xh" x1="0" x2="0" y1={pad.t} y2={H - pad.b} />
       </svg>
       <div class="tip" />

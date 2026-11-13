@@ -89,9 +89,9 @@ export function createDashboard(
   const days = (q: string | undefined) => ([7, 30, 90].includes(Number(q)) ? Number(q) : 30);
 
   app.get("/healthz", (c) => c.json({ ok: true }));
-  const fontPath = createRequire(import.meta.url).resolve("@fontsource-variable/inter/files/inter-latin-wght-normal.woff2");
+  const fontPath = createRequire(import.meta.url).resolve("@fontsource-variable/mona-sans/files/mona-sans-latin-standard-normal.woff2");
   let font: Buffer | null = null;
-  app.get("/assets/inter.woff2", async (c) => {
+  app.get("/assets/mona-sans.woff2", async (c) => {
     font ??= await readFile(fontPath);
     return c.body(new Uint8Array(font), 200, { "content-type": "font/woff2", "cache-control": "public, max-age=31536000, immutable" });
   });

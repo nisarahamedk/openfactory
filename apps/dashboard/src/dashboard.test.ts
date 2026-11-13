@@ -158,7 +158,7 @@ describe("dashboard", () => {
     expect(html).toContain("1h 0m"); // kickoff → PR
     expect(html).toContain("2h 0m"); // PR → first review
     expect(html).toContain("+30 −5");
-    expect(html).toContain("Cost per PR by size");
+    expect(html).toContain("Cost by PR size");
     expect(html).toContain("<svg");
   });
 
@@ -205,7 +205,7 @@ describe("dashboard", () => {
     expect(await (await app.request("/automations")).text()).toContain("factory.yaml");
     expect((await app.request("/secrets")).status).toBe(200);
     expect((await app.request("/environments")).status).toBe(200);
-    const font = await app.request("/assets/inter.woff2");
+    const font = await app.request("/assets/mona-sans.woff2");
     expect(font.headers.get("content-type")).toBe("font/woff2");
     expect((await font.arrayBuffer()).byteLength).toBeGreaterThan(10_000);
   });
