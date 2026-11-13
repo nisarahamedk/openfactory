@@ -527,6 +527,20 @@ export function PersonPage({ login, teams, facts, now, f, viewer }: { login: str
   );
 }
 
+/** Sign-in when the org's identity provider is configured. */
+export function ProviderSigninPage({ provider, back }: { provider: "github" | "oidc"; back: string }) {
+  return (
+    <>
+      <PageHeader title="Sign in" sub="The factory works as you: tasks you ask for, messages you send and changes you make carry your name." />
+      <div class="card" style="max-width:420px">
+        <a class="btn primary" style="width:100%;justify-content:center;height:40px" href={`/auth/start?back=${encodeURIComponent(back)}`}>
+          {provider === "github" ? "Sign in with GitHub" : "Sign in with your company account"}
+        </a>
+      </div>
+    </>
+  );
+}
+
 export function SigninPage({ people: ppl, viewer, back }: { people: PersonRow[]; viewer: string | null; back: string }) {
   return (
     <>

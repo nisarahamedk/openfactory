@@ -87,6 +87,44 @@ With a GitHub App, each task's agent gets its own token, limited to the task's r
 
 The app's installation for the first repo in `repos` serves the server's own calls. Each task token covers repos of one owner, so keep a task's repos under one org.
 
+## Sign-in for the app
+
+Without sign-in, the app has one shared password and a name picker. Anyone with the password can then act as anyone, so use that only in development. With sign-in, every task, message, stop, retry and rollout carries the person's real login, and roles limit who can do what:
+
+| Role | Can |
+|---|---|
+| viewer | read everything, save views |
+| engineer | also ask for tasks, write to them, stop and retry them, turn them into benchmarks |
+| admin | also change factory rollouts and start paid benchmark runs |
+
+Nobody gets in by default. Logins listed under `admins`, `engineers` or `viewers` always get in with that role. Beyond the lists, the org is the gate: members of `githubOrg` (GitHub) or anyone your OIDC issuer signs in. Those unlisted people get `defaultRole`, which is viewer unless you change it. With GitHub and no `githubOrg` (a personal account), only the lists get in, and the app refuses to start if all three are empty.
+
+The role is worked out again on every request, so taking someone off a list takes effect at once. Someone who leaves the GitHub org keeps access until their session ends (12 hours).
+
+**GitHub** (the login is the GitHub login, which matches who asked for tasks):
+
+1. Go to GitHub → your org → Settings → Developer settings → OAuth Apps → **New OAuth App**.
+2. Set Homepage URL to the app's URL, and Authorization callback URL to `<app URL>/auth/callback`.
+3. Generate a client secret.
+
+**OIDC** (Okta, Entra ID, Google, Keycloak, Dex):
+
+1. Create a web client with redirect URI `<app URL>/auth/callback`.
+2. Choose the claim that matches people's code-host logins (`oidcLoginClaim`). The part before any `@` is used, so the issuer must be your org's own IdP: `alice@a.com` and `alice@b.com` would be the same login.
+3. With a shared issuer such as Google, set `oidcEmailDomains` (e.g. `{acme.com}`), or anyone with a Google account could sign in as a viewer.
+
+Then install it:
+
+```bash
+kubectl -n factory create secret generic openfactory-dashboard-auth \
+  --from-literal=AUTH_CLIENT_ID=... --from-literal=AUTH_CLIENT_SECRET=... \
+  --from-literal=SESSION_SECRET="$(openssl rand -hex 32)"
+helm upgrade factory deploy/helm/openfactory -n factory --reuse-values \
+  --set dashboard.auth.provider=github --set dashboard.auth.secret=openfactory-dashboard-auth \
+  --set dashboard.auth.publicUrl=https://factory-app.example.com \
+  --set dashboard.auth.githubOrg=acme --set 'dashboard.auth.admins={alice}'
+```
+
 ## Configure
 
 Everything is in `values.yaml`. The parts you will touch:

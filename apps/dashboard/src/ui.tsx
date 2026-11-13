@@ -385,7 +385,7 @@ export function Shell(p: ShellProps) {
             </form>
             <NavItems p={p} />
             <div class="foot" style="flex-direction:column;align-items:flex-start;gap:4px">
-              <span>{p.viewer ? <>Signed in as <b style="color:var(--ink);font-weight:600">{p.viewer}</b></> : "Not signed in"} · <a class="link" href="/signin">{p.viewer ? "switch" : "sign in"}</a></span>
+              <span>{p.viewer ? <>Signed in as <b style="color:var(--ink);font-weight:600">{p.viewer}</b> · <form method="post" action="/signout" style="display:inline;margin:0"><button type="submit" class="link" style="background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer">sign out</button></form></> : <>Not signed in · <a class="link" href="/signin">sign in</a></>}</span>
               {p.factory?.version ? <span class="mono" title="Version the factory server runs">{p.factory.version.slice(0, 18)}</span> : null}
             </div>
           </aside>
