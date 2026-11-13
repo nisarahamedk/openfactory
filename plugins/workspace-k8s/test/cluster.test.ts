@@ -23,7 +23,9 @@ const taskId = `task_itest${Date.now().toString(36)}`;
 function mockRunner(): string {
   const mockSource = readFileSync(require.resolve("@openfactory/agent-acp/mock-anthropic"), "utf8");
   return `${mockSource}
+import { appendFileSync } from "node:fs";
 startMockAnthropic([
+  (r) => { appendFileSync("/work/mock/requests.log", JSON.stringify({ tools: r.hasTools, toolResult: r.lastIsToolResult, last: r.lastUserText.slice(-200), n: r.messages.length }) + "\n"); return null; },
   (r) => r.lastUserText.includes("ROUND1") && !r.lastIsToolResult
     ? [{ type: "tool_use", name: "Bash", input: { command: "kubectl get pods -o name > pods.txt; kubectl -n default get pods > forbidden.txt 2>&1; echo r1 > round.txt", description: "check env" } }] : null,
   (r) => r.lastUserText.includes("ROUND2") && !r.lastIsToolResult
@@ -80,10 +82,16 @@ test.runIf(run)("worker path on a real cluster: env, workspace, agent, sleep, wa
     const mock2 = await ws.spawn(["node", "/work/mock/mock.mjs"], { cwd: "/work/mock" });
     await new Promise((r) => setTimeout(r, 1500));
 
+    // The transcript must have survived the pod being deleted and recreated.
+    const transcript = await ws.exec(["sh", "-c", `ls /work/home/.claude/projects/*/${sessionId}.jsonl`]);
+    expect(transcript.exitCode, transcript.stderr).toBe(0);
     const s2 = await harness.openSession({ workspace: ws, cwd: ws.repoPath, systemPrompt: "itest", resumeSessionId: sessionId, env: envVars });
     const t2 = await s2.prompt("ROUND2", () => undefined);
     await s2.close();
     await mock2.kill();
+    if (!t2.summary.includes("remembered ROUND1")) {
+      console.log((await ws.exec(["cat", "/work/mock/requests.log"])).stdout);
+    }
     expect(t2.summary).toContain("remembered ROUND1");
     expect((await ws.exec(["cat", "round.txt"])).stdout).toBe("r1\nr2\n");
   } finally {

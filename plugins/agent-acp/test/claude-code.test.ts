@@ -55,6 +55,9 @@ test("a resumed session keeps the conversation", { timeout: 180_000 }, async () 
     branch: "factory/task_1",
     image: null,
   });
+  // Claude Code lists skills to the model as an extra user message; the cluster
+  // workspace always has the environment's skill, so the test does too.
+  await ws.writeFile(join(root, "ws", "task_1", ".claude", "skills", "factory-environment", "SKILL.md"), "---\nname: factory-environment\ndescription: How to deploy.\n---\n\nDeploy with devspace.\n");
   const logs: string[] = [];
   const harness = claudeCodeHarness({
     model: "claude-sonnet-5-5",

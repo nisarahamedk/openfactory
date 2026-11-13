@@ -20,9 +20,9 @@ export interface MockRequest {
   stream: boolean;
   /** Every text in the conversation, joined, for easy matching. */
   transcript: string;
-  /** True when the newest user message carries tool results. */
+  /** True when the input since the model's last reply carries tool results. */
   lastIsToolResult: boolean;
-  /** Text of the newest user message. */
+  /** Text of every user message since the model's last reply. */
   lastUserText: string;
   /** True for the agent's main loop (it offers tools); false for side calls such as titles. */
   hasTools: boolean;
@@ -122,17 +122,22 @@ export async function startMockAnthropic(rules: MockRule[], port = 0, host = "12
 function toMockRequest(body: Record<string, unknown>): MockRequest {
   const messages = (body.messages as MockRequest["messages"] | undefined) ?? [];
   const system = textOf(body.system);
-  const userMessages = messages.filter((m) => m.role === "user");
-  const last = userMessages[userMessages.length - 1];
-  const lastBlocks = Array.isArray(last?.content) ? (last.content as Array<{ type?: string }>) : [];
+  // The model's "current input" is everything after its last reply: the user's
+  // prompt plus any reminders the agent adds as separate messages, or tool results.
+  let lastAssistant = -1;
+  messages.forEach((m, i) => {
+    if (m.role === "assistant") lastAssistant = i;
+  });
+  const trailing = messages.slice(lastAssistant + 1).filter((m) => m.role === "user");
+  const trailingBlocks = trailing.flatMap((m) => (Array.isArray(m.content) ? (m.content as Array<{ type?: string }>) : []));
   return {
     model: typeof body.model === "string" ? body.model : "mock",
     system,
     messages,
     stream: body.stream === true,
     transcript: messages.map((m) => textOf(m.content)).join("\n"),
-    lastIsToolResult: last?.role === "user" && lastBlocks.some((b) => b.type === "tool_result"),
-    lastUserText: last === undefined ? "" : textOf(last.content),
+    lastIsToolResult: trailingBlocks.some((b) => b.type === "tool_result"),
+    lastUserText: trailing.map((m) => textOf(m.content)).join("\n"),
     hasTools: Array.isArray(body.tools) && body.tools.length > 0,
   };
 }
