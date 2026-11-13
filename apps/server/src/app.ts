@@ -13,6 +13,13 @@ import { Signal, TaskId, TaskStatus } from "@openfactory/contracts";
 import type { Ledger } from "@openfactory/ledger";
 import type { EvidenceStore } from "@openfactory/task-job";
 import { Hono } from "hono";
+import { z } from "zod";
+
+const EgressReport = z.object({
+  entries: z
+    .array(z.object({ taskId: TaskId, host: z.string().max(253), allowed: z.boolean(), count: z.number().int().positive(), from: z.string(), to: z.string() }))
+    .max(5000),
+});
 
 const SAFE = /^[A-Za-z0-9._-]{1,200}$/;
 
@@ -82,6 +89,19 @@ export function createApp(d: AppDeps): Hono {
     const s = Signal.safeParse(await c.req.json());
     if (!s.success) return c.json({ code: "INVALID_REQUEST", message: "not a Signal", issues: s.error.issues }, 400);
     return c.json({ result: await d.onSignal(s.data) }, 202);
+  });
+  /** The egress proxy's collector reports what each task's sandbox reached; denied hosts show on the task timeline. */
+  v1.post("/egress", async (c) => {
+    const body = EgressReport.safeParse(await c.req.json());
+    if (!body.success) return c.json({ code: "INVALID_REQUEST", message: "bad egress report", issues: body.error.issues }, 400);
+    let recorded = 0;
+    for (const e of body.data.entries) {
+      if (!(await d.ledger.getTask(e.taskId))) continue;
+      const { taskId, ...data } = e;
+      await d.ledger.append(taskId, "egress", data, { dedupeKey: `egress:${taskId}:${e.host}:${e.allowed}:${e.from}` });
+      recorded++;
+    }
+    return c.json({ recorded }, 202);
   });
   if (d.bench) v1.route("/", d.bench);
   app.route("/v1", v1);

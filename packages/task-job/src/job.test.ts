@@ -29,6 +29,7 @@ function world() {
   const posts: Array<{ to: number; md: string }> = [];
   const prs = new Map<string, { number: number; url: string; headSha: string }>();
   const sessions: string[] = [];
+  const envs: Record<string, string>[] = [];
   const prompts: string[] = [];
   let sha = 0;
   const life: string[] = [];
@@ -38,7 +39,6 @@ function world() {
     repoPath: "/repo",
     async exec(cmd) {
       const [c, ...a] = cmd;
-      if (c === "sh" && a[1]?.includes("bundle")) return { exitCode: 0, stdout: Buffer.from(`bundle:${a[4]}`).toString("base64"), stderr: "" };
       if (c === "sh") return { exitCode: 0, stdout: HOME, stderr: "" };
       if (c === "git") return { exitCode: 0, stdout: "", stderr: "" };
       if (c === "cat") {
@@ -78,6 +78,7 @@ function world() {
     name: "fake-agent",
     model: "fake",
     async openSession(input) {
+      envs.push(input.env ?? {});
       const sessionId = input.resumeSessionId ?? `sess-${sessions.length + 1}`;
       sessions.push(sessionId);
       return {
@@ -124,9 +125,7 @@ function world() {
   };
   const sunk: TaskRecord[] = [];
   const sink: MetricsSink = { name: "fake-dx", writeTasks: async (r) => void sunk.push(...r) };
-  const pushed: string[] = [];
-  const pusher = { push: async (_r: unknown, branch: string, b: Uint8Array) => void pushed.push(`${branch}=${Buffer.from(b).toString()}`) };
-  return { workspace, environment, agent, codeForge, chat, sink, posts, sessions, prompts, life, sunk, files, pusher, pushed };
+  return { workspace, environment, agent, codeForge, chat, sink, posts, sessions, prompts, life, sunk, files, envs };
 }
 
 describe("task job", () => {
@@ -148,7 +147,6 @@ describe("task job", () => {
         agent: w.agent,
         workspace: w.workspace,
         environment: w.environment,
-        pusher: w.pusher,
         modelKeys: { forTask: async (t: string) => ({ ANTHROPIC_API_KEY: `key-${t}` }), revoke: async () => {} },
         evidence: { put: async (t, name) => ({ url: `https://factory/evidence/${t}/${name}` }) },
         scorers: factScorers,
@@ -182,7 +180,8 @@ describe("task job", () => {
     expect(w.posts.some((p) => p.to === 7 && p.md.includes("On it"))).toBe(true);
     expect(w.posts.some((p) => p.to === 41 && p.md.includes("Ready for review") && p.md.includes("![Feature at 1]"))).toBe(true);
     expect(w.life).toEqual(["env.sleep", "ws.sleep"]);
-    expect(w.pushed[0]).toBe(`factory/${taskId}=bundle:factory/${taskId}`);
+    expect(w.envs[0]?.GH_TOKEN).toBe("t");
+    expect(w.envs[0]?.ANTHROPIC_API_KEY).toBe(`key-${taskId}`);
 
     // A question in the issue goes to the foreman, not the worker.
     await jobs.handle({ ...base, id: "d2", type: "issue_comment", issueNumber: 7, body: "status?" });
