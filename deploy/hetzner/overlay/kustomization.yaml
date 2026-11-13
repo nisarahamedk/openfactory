@@ -40,7 +40,7 @@ patches:
         value: { name: ENV_COPY_SECRETS, value: "factory/firstword-dev" }
       - op: add
         path: /spec/template/spec/containers/0/env/-
-        value: { name: ENV_AGENT_VARS, value: "FACTORY_DOMAIN=178.105.22.96.sslip.io" }
+        value: { name: ENV_AGENT_VARS, value: "FACTORY_DOMAIN=178.105.22.96.sslip.io,FIRSTWORD_REMOTE_BINDINGS=off,WRANGLER_SEND_METRICS=false" }
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: { name: ENV_DEPLOY_COMMAND, value: "devspace dev --namespace {namespace}" }
