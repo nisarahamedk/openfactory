@@ -27,6 +27,7 @@
     "@openfactory/secrets-infisical": "workspace:*",
     "@openfactory/secrets-k8s": "workspace:*",
     "@openfactory/task-job": "workspace:*",
+    "@openfactory/telemetry-otlp": "workspace:*",
     "@openfactory/workspace-k8s": "workspace:*",
     "@openfactory/workspace-local": "workspace:*",
     "hono": "4.10.4",
