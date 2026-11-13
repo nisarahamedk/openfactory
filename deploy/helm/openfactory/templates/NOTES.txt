@@ -1,0 +1,17 @@
+SlopwareFactory is installing in namespace {{ .Release.Namespace }}.
+
+Server:     {{ .Values.publicUrl }}   (Service {{ .Release.Name }}-server:3000)
+{{- if .Values.dashboard.enabled }}
+Dashboard:  {{ if .Values.ingress.enabled }}https://{{ .Values.ingress.dashboard.host }}{{ else }}kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-dashboard 8080{{ end }}  (user "factory")
+            password: kubectl -n {{ .Release.Namespace }} get secret {{ include "of.generatedSecret" . }} -o jsonpath='{.data.DASHBOARD_PASSWORD}' | base64 -d
+{{- end }}
+API token:  Secret {{ include "of.generatedSecret" . }}, key FACTORY_API_TOKEN
+Watching:   {{ join ", " .Values.repos }} (label "{{ .Values.label }}")
+Sandboxes:  namespace {{ .Values.workspaces.namespace }}{{ if .Values.egress.enabled }}, egress via {{ include "of.proxyUrl" . }} ({{ len .Values.egress.allow }} allowed hosts){{ end }}
+{{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.kubeApi.cidrs) }}
+
+Note: the Kubernetes API address for the sandbox NetworkPolicy was looked up at install time.
+If `helm template` rendered it (no cluster access), set networkPolicy.kubeApi.cidrs explicitly.
+{{- end }}
+
+Label an issue "{{ .Values.label }}" in a watched repo to start a task. Docs: docs/self-host.md.

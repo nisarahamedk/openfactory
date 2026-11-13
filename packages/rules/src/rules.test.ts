@@ -46,6 +46,10 @@ describe("decide", () => {
     const issueComment: Signal = { ...base, type: "issue_comment", issueNumber: 1, body: "status?" };
     expect(decide(task(), issueComment, cfg).kind).toBe("foreman_reply");
     expect(decide(task(), { ...issueComment, issueNumber: 9 }, cfg).kind).toBe("review_round");
+    // CI and other bots' comments never start a round or a retry.
+    const ciBot = { login: "github-actions[bot]", isBot: true };
+    expect(decide(task(), { ...issueComment, issueNumber: 9, actor: ciBot }, cfg).kind).toBe("ignore");
+    expect(decide(task({ status: "failed" }), { ...issueComment, issueNumber: 9, actor: ciBot }, cfg).kind).toBe("ignore");
     const review: Signal = { ...base, type: "pr_review_comment", prNumber: 9, body: "fix", path: null };
     expect(decide(task(), review, cfg).kind).toBe("review_round");
     expect(decide(task({ people: { comments: 0, reviewRounds: 3 } }), review, cfg).kind).toBe("foreman_reply");

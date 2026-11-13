@@ -13,7 +13,7 @@ import type { Signal, TaskId, TaskRecord } from "@openfactory/contracts";
 import { askForeman, FOREMAN_INSTRUCTIONS } from "@openfactory/foreman";
 import { decide, isTerminal, pickModel, type Action, type ModelRouting } from "@openfactory/rules";
 import { issueTarget, type JobDeps } from "./deps.js";
-import { scoreAndExport, sleepAll } from "./steps.js";
+import { describeError, scoreAndExport, sleepAll } from "./steps.js";
 import { jobTasks, type JobTasks } from "./tasks.js";
 
 export type TaskJobsOptions = {
@@ -134,7 +134,6 @@ export class TaskJobs {
         const routed = this.opts.modelRouting
           ? pickModel({ title: signal.title, labels: signal.labels ?? [signal.label] }, this.opts.modelRouting)
           : { model: this.opts.harnessInfo.model, reason: "default" };
-        this.deps.log("model routed", { issue: signal.issueNumber, model: routed.model, reason: routed.reason });
         const { record, appended } = await l.createTask({
           id: newTaskId(),
           factoryVersion: this.opts.factoryVersion(),
@@ -151,6 +150,7 @@ export class TaskJobs {
           at: signal.at,
         });
         if (!appended) return { ...action, taskId: record.id };
+        this.deps.log("model routed", { taskId: record.id, issue: signal.issueNumber, model: routed.model, reason: routed.reason });
         await this.create(record.id, (t) => ({ def: t.Intake, input: { taskId: record.id } }));
         void this.foremanSay(record.id, "ack", "", `ack:${signal.id}`);
         return { ...action, taskId: record.id };
@@ -236,7 +236,7 @@ export class TaskJobs {
       const posted = await this.deps.chat.post(target, reply.text);
       await this.deps.ledger.append(taskId, "foreman_replied", { url: posted.url, usage: reply.usage }, { dedupeKey: `foreman:${requestId}` });
     } catch (e) {
-      this.deps.log("foreman failed", { taskId, error: String(e) });
+      this.deps.log("foreman failed", { taskId, error: describeError(e) });
     }
   }
 

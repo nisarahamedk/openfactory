@@ -1,0 +1,49 @@
+# The server creates a sandbox pod per task in the workspaces namespace and, with devspace, a namespace,
+# service account and short-lived kubeconfig per task environment. That needs cluster-wide rights over those kinds.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-server
+  labels: {{- include "of.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-{{ .Release.Namespace }}-server
+  labels: {{- include "of.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, pods, pods/exec, pods/log, pods/attach, pods/portforward, events, services, configmaps, secrets, serviceaccounts, serviceaccounts/token, persistentvolumeclaims, resourcequotas, limitranges]
+    verbs: ["*"]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: ["*"]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: ["*"]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: ["*"]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-{{ .Release.Namespace }}-server
+  labels: {{- include "of.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ .Release.Name }}-{{ .Release.Namespace }}-server }
+subjects:
+  - { kind: ServiceAccount, name: {{ .Release.Name }}-server, namespace: {{ .Release.Namespace }} }
+{{- if .Values.workspaces.createNamespace }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.workspaces.namespace }}
+  labels:
+    {{- include "of.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: {{ .Values.workspaces.podSecurity }}
+  annotations: { helm.sh/resource-policy: keep }
+{{- end }}

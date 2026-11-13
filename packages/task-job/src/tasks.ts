@@ -14,6 +14,7 @@ import type { JobDeps } from "./deps.js";
 import { intakePrompt, reviewPrompt } from "./prompts.js";
 import {
   announceReview,
+  describeError,
   fail,
   mustTask,
   notePushesByOthers,
@@ -43,9 +44,10 @@ async function guarded(deps: JobDeps, taskId: TaskId, stage: string, rt: Rt, c: 
     await body();
   } catch (e) {
     if (rt.signal?.aborted) throw e; // aborted: the abort handler records it
-    const message = e instanceof Error ? e.message : String(e);
+    const message = describeError(e);
     deps.log("phase failed", { taskId, stage, error: message });
     await fail(deps, taskId, stage, message);
+    await sleepAll(deps, taskId); // a comment can retry it, so keep the env but stop paying for it
     await scoreAndExport(deps, taskId);
     await failed(rt, c, message);
   }

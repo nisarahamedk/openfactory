@@ -1,0 +1,92 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $inst := dict "app.kubernetes.io/instance" .Release.Name }}
+{{- $wsNs := dict "kubernetes.io/metadata.name" .Values.workspaces.namespace }}
+{{- $relNs := dict "kubernetes.io/metadata.name" .Release.Namespace }}
+# Control plane: only its own pods, the ingress controller and the sandboxes' two allowed routes get in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-default-deny-ingress
+  labels: {{- include "of.labels" . | nindent 4 }}
+spec:
+  podSelector: { matchLabels: {{ toJson $inst }} }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: {{ toJson $inst }} } }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-ingress-controller
+  labels: {{- include "of.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name }}] }
+      - { key: app.kubernetes.io/name, operator: In, values: [server, dashboard] }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ namespaceSelector: {{ toJson .Values.networkPolicy.ingressControllerNamespaceSelector }} }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-sandboxes
+  labels: {{- include "of.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name }}] }
+      - { key: app.kubernetes.io/name, operator: In, values: [litellm, egress] }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: {{ toJson $wsNs }} } }]
+      ports: [{ port: 4000 }, { port: 3128 }]
+---
+# Sandboxes take no inbound connections; the server drives them through the Kubernetes API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandbox-deny-ingress
+  namespace: {{ .Values.workspaces.namespace }}
+  labels: {{- include "of.labels" . | nindent 4 }}
+spec: { podSelector: {}, policyTypes: [Ingress] }
+---
+# Sandboxes get out only via DNS, the egress proxy, the model gateway and the Kubernetes API.
+{{- $cidrs := .Values.networkPolicy.kubeApi.cidrs }}
+{{- if not $cidrs }}
+{{- with (lookup "discovery.k8s.io/v1" "EndpointSlice" "default" "kubernetes") }}
+{{- range .endpoints }}{{ range .addresses }}{{ $cidrs = append $cidrs (printf "%s/32" .) }}{{ end }}{{ end }}
+{{- end }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandbox-egress
+  namespace: {{ .Values.workspaces.namespace }}
+  labels: {{- include "of.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to: [{ namespaceSelector: {{ toJson .Values.networkPolicy.dns.namespaceSelector }}, podSelector: {{ toJson .Values.networkPolicy.dns.podSelector }} }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to:
+        - namespaceSelector: { matchLabels: {{ toJson $relNs }} }
+          podSelector:
+            matchExpressions:
+              - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name }}] }
+              - { key: app.kubernetes.io/name, operator: In, values: [litellm, egress] }
+      ports: [{ port: 4000 }, { port: 3128 }]
+    {{- if $cidrs }}
+    # Kubernetes API ({{ if .Values.networkPolicy.kubeApi.cidrs }}from values{{ else }}looked up from default/kubernetes at install{{ end }}).
+    - to:
+        {{- range $cidrs }}
+        - ipBlock: { cidr: {{ . }} }
+        {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.kubeApi.ports }}
+        - { port: {{ . }} }
+        {{- end }}
+    {{- end }}
+{{- end }}

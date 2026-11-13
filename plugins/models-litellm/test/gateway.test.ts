@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { LiteLlmGateway } from "../src/index.js";
 
 /** A small stand-in for LiteLLM's key admin API (/key/info, /key/generate, /key/delete). */
@@ -58,4 +58,13 @@ test("spend is read back, and revoke is safe twice", async () => {
   await gateway.revoke("task_a");
   await gateway.revoke("task_a");
   expect(await gateway.spend("task_a")).toBeNull();
+});
+
+describe("anthropicBase", () => {
+  it("drops a trailing /v1 so the agent does not call /v1/v1/messages", async () => {
+    const { anthropicBase } = await import("../src/index.js");
+    expect(anthropicBase("http://litellm:4000/v1")).toBe("http://litellm:4000");
+    expect(anthropicBase("http://litellm:4000/v1/")).toBe("http://litellm:4000");
+    expect(anthropicBase("http://litellm:4000")).toBe("http://litellm:4000");
+  });
 });

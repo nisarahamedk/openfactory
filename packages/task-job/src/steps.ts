@@ -10,6 +10,27 @@ import { branchFor, issueTarget, type JobDeps } from "./deps.js";
 import { systemPrompt } from "./prompts.js";
 import { TranscriptRecorder } from "./transcript.js";
 
+/**
+ * A readable message for anything thrown, including non-Error values such as Kubernetes client
+ * ApiExceptions ({ code, body }) that would otherwise print as "[object Object]".
+ */
+export function describeError(e: unknown): string {
+  if (e instanceof Error) {
+    const extra = e as Error & { code?: unknown; statusCode?: unknown; body?: unknown };
+    const status = extra.code ?? extra.statusCode;
+    const body = typeof extra.body === "string" ? extra.body : extra.body ? JSON.stringify(extra.body) : "";
+    return [e.message, status !== undefined ? `(status ${String(status)})` : "", body.slice(0, 500)].filter(Boolean).join(" ");
+  }
+  if (typeof e === "object" && e !== null) {
+    try {
+      return JSON.stringify(e).slice(0, 1000);
+    } catch {
+      return Object.prototype.toString.call(e);
+    }
+  }
+  return String(e);
+}
+
 export async function mustTask(deps: JobDeps, taskId: TaskId): Promise<TaskRecord> {
   const r = await deps.ledger.getTask(taskId);
   if (!r) throw new Error(`task ${taskId} not in ledger`);
@@ -23,13 +44,16 @@ export async function prepare(deps: JobDeps, taskId: TaskId): Promise<void> {
   const branch = branchFor(deps, record);
   if (!record.branch) await deps.ledger.append(taskId, "branch_set", { branch });
 
+  // A retry after a failure or cancel finds both asleep (pod deleted, disk kept): wake them before use.
   let env: EnvironmentHandle | null = record.environment ? await deps.environment.get(record.environment.name) : null;
-  if (!env) {
+  if (env) await env.wake();
+  else {
     env = await deps.environment.create({ taskId, repo: record.source.repo });
     await deps.ledger.append(taskId, "environment_attached", { plugin: deps.environment.name, name: env.name });
   }
   let ws: WorkspaceHandle | null = record.workspace ? await deps.workspace.get(record.workspace.id) : null;
-  if (!ws) {
+  if (ws) await ws.wake();
+  else {
     ws = await deps.workspace.create({ taskId, repo: record.source.repo, branch, image: deps.config.workerImage });
     await deps.ledger.append(taskId, "workspace_attached", { plugin: deps.workspace.name, id: ws.id });
   }
@@ -76,7 +100,7 @@ export async function sleepAll(deps: JobDeps, taskId: TaskId): Promise<void> {
     await env.sleep();
     await ws.sleep();
   } catch (e) {
-    deps.log("sleep failed", { taskId, error: String(e) });
+    deps.log("sleep failed", { taskId, error: describeError(e) });
   }
 }
 
@@ -94,7 +118,7 @@ export async function notePushesByOthers(deps: JobDeps, taskId: TaskId): Promise
       await recordPrStats(deps, taskId);
     }
   } catch (e) {
-    deps.log("push check failed", { taskId, error: String(e) });
+    deps.log("push check failed", { taskId, error: describeError(e) });
   }
 }
 
@@ -107,7 +131,7 @@ export async function recordPrStats(deps: JobDeps, taskId: TaskId): Promise<void
     const st = await deps.codeForge.pullRequestStats(record.source.repo, record.pr.number);
     await deps.ledger.append(taskId, "pr_stats", st, { dedupeKey: `pr_stats:${taskId}:${st.headSha}` });
   } catch (e) {
-    deps.log("pr stats failed", { taskId, error: String(e) });
+    deps.log("pr stats failed", { taskId, error: describeError(e) });
   }
 }
 
@@ -118,7 +142,29 @@ async function saveTranscript(deps: JobDeps, taskId: TaskId, turn: number, t: Tr
     const { url } = await deps.evidence.put(taskId, key, Buffer.from(t.toJsonl(), "utf8"), "application/x-ndjson");
     await deps.ledger.append(taskId, "transcript_saved", { turn, key, url, lines: t.size }, { dedupeKey: `transcript:${taskId}:${turn}` });
   } catch (e) {
-    deps.log("transcript save failed", { taskId, turn, error: String(e) });
+    deps.log("transcript save failed", { taskId, turn, error: describeError(e) });
+  }
+}
+
+/**
+ * The turn's cost as the model gateway billed it: the key's total spend minus what earlier turns recorded
+ * (so a gateway that books spend a little late is corrected on the next turn). Falls back to the agent's
+ * own estimate, which depends on the agent knowing the model's price.
+ */
+async function billedUsage(deps: JobDeps, taskId: TaskId, reported: { inputTokens: number; outputTokens: number; costUsd: number }) {
+  if (!deps.modelKeys?.spend) return reported;
+  try {
+    const total = await deps.modelKeys.spend(taskId);
+    if (total === null) return reported;
+    const earlier = (await deps.ledger.events(taskId)).reduce((sum, e) => {
+      if (e.type === "turn_finished") return sum + ((e.data as { usage?: { costUsd?: number } }).usage?.costUsd ?? 0);
+      if (e.type === "cost_adjusted") return sum + ((e.data as { deltaUsd?: number }).deltaUsd ?? 0);
+      return sum;
+    }, 0);
+    return { ...reported, costUsd: Math.max(0, Math.round((total - earlier) * 1e6) / 1e6) };
+  } catch (e) {
+    deps.log("gateway spend failed", { taskId, error: describeError(e) });
+    return reported;
   }
 }
 
@@ -160,21 +206,22 @@ export async function runTurn(
       transcript.update(u);
       if (u.kind === "tool_call" && (u.status === "completed" || u.status === "failed")) deps.log("tool", { taskId, title: u.title, status: u.status });
     });
-    transcript.result(result.stopReason, result.usage);
+    const usage = await billedUsage(deps, taskId, result.usage);
+    transcript.result(result.stopReason, usage);
     await deps.ledger.append(taskId, "turn_finished", {
       reason,
-      usage: result.usage,
+      usage,
       stopReason: result.stopReason,
       summary: result.summary.slice(0, 4000),
     });
     return result.summary;
   } catch (e) {
-    transcript.error(e instanceof Error ? e.message : String(e));
+    transcript.error(describeError(e));
     throw e;
   } finally {
     signal.removeEventListener("abort", onAbort);
     await saveTranscript(deps, taskId, turn, transcript);
-    await session.close().catch((e) => deps.log("session close failed", { taskId, error: String(e) }));
+    await session.close().catch((e) => deps.log("session close failed", { taskId, error: describeError(e) }));
   }
 }
 
@@ -196,7 +243,7 @@ export async function ensurePr(deps: JobDeps, taskId: TaskId, summary: string): 
       pr = await deps.codeForge.findPullRequestForBranch(record.source.repo, branch);
       if (!pr) pr = { ...opened, headSha: "" };
     } catch (e) {
-      deps.log("open PR failed (branch not pushed?)", { taskId, error: String(e) });
+      deps.log("open PR failed (branch not pushed?)", { taskId, error: describeError(e) });
       return record;
     }
   }
@@ -297,7 +344,7 @@ export async function reviewGate(deps: JobDeps, taskId: TaskId, summary: string,
   if (nudges < deps.config.maxNudges)
     return {
       kind: "nudge",
-      prompt: `The factory can't send this to review yet: ${ready.reason}\nCommit and push branch \`${branchFor(deps, record)}\`, open the pull request if it isn't open yet, run the e2e tests against your environment, and write evidence for your HEAD commit to $HOME/evidence/manifest.json as described in your instructions. Then stop.`,
+      prompt: `The factory can't send this to review yet: ${ready.reason}\nCommit and push branch \`${branchFor(deps, record)}\`, open the pull request if it isn't open yet, run the e2e tests against your environment, and write evidence for your HEAD commit to $HOME/evidence/manifest.json as described in your instructions. If your environment is still starting, wait for it in the foreground (poll its URL for up to 10 minutes); do not end the turn until the evidence is written.`,
     };
   return { kind: "give_up", reason: ready.reason };
 }
@@ -319,8 +366,31 @@ export async function fail(deps: JobDeps, taskId: TaskId, stage: string, message
   if (target) await deps.chat.post(target, `The factory stopped this task at **${stage}**: ${message.slice(0, 1000)}\n\nComment again to retry.`).catch(() => {});
 }
 
+/**
+ * Make the record's agent cost equal what the gateway billed the task key. Turn costs are read right after
+ * each turn, and gateways book spend late (LiteLLM batches writes), so this runs again whenever the task
+ * settles. Never throws.
+ */
+export async function reconcileCost(deps: JobDeps, taskId: TaskId): Promise<void> {
+  if (!deps.modelKeys?.spend) return;
+  try {
+    const gateway = await deps.modelKeys.spend(taskId);
+    if (gateway === null) return;
+    const recorded = (await deps.ledger.events(taskId)).reduce((sum, e) => {
+      if (e.type === "turn_finished") return sum + ((e.data as { usage?: { costUsd?: number } }).usage?.costUsd ?? 0);
+      if (e.type === "cost_adjusted") return sum + ((e.data as { deltaUsd?: number }).deltaUsd ?? 0);
+      return sum;
+    }, 0);
+    const deltaUsd = Math.round((gateway - recorded) * 1e6) / 1e6;
+    if (Math.abs(deltaUsd) >= 0.0001) await deps.ledger.append(taskId, "cost_adjusted", { deltaUsd, gatewayUsd: gateway });
+  } catch (e) {
+    deps.log("cost reconcile failed", { taskId, error: describeError(e) });
+  }
+}
+
 /** Score the record and push it to every metrics sink. Never throws. */
 export async function scoreAndExport(deps: JobDeps, taskId: TaskId): Promise<void> {
+  await reconcileCost(deps, taskId);
   try {
     const record = await mustTask(deps, taskId);
     const events = await deps.ledger.events(taskId);
@@ -331,8 +401,8 @@ export async function scoreAndExport(deps: JobDeps, taskId: TaskId): Promise<voi
       if (!old || old.value !== s.value || old.label !== s.label) await deps.ledger.append(taskId, "score_added", { score: s });
     }
     const fresh = await mustTask(deps, taskId);
-    for (const sink of deps.sinks) await sink.writeTasks([fresh]).catch((e) => deps.log("sink failed", { sink: sink.name, error: String(e) }));
+    for (const sink of deps.sinks) await sink.writeTasks([fresh]).catch((e) => deps.log("sink failed", { sink: sink.name, error: describeError(e) }));
   } catch (e) {
-    deps.log("scoring failed", { taskId, error: String(e) });
+    deps.log("scoring failed", { taskId, error: describeError(e) });
   }
 }
