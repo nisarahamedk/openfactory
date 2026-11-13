@@ -12,7 +12,7 @@
  *  - Budgets: per-task spend and review rounds are capped.
  *  - A failed task is retried when a person comments on it.
  */
-import type { Signal, TaskRecord, TaskStatus } from "@openfactory/contracts";
+import { FACTORY_MARKER, type Signal, type TaskRecord, type TaskStatus } from "@openfactory/contracts";
 
 export type RulesConfig = {
   label: string; // e.g. "factory"
@@ -37,6 +37,7 @@ export function isTerminal(status: TaskStatus): boolean {
 }
 
 function fromOurBot(signal: Signal, cfg: RulesConfig): boolean {
+  if ("body" in signal && signal.type !== "issue_labeled" && signal.body.includes(FACTORY_MARKER)) return true;
   const login = signal.actor.login.toLowerCase();
   return cfg.botLogins.some((b) => b.toLowerCase() === login);
 }

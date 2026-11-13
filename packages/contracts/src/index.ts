@@ -168,7 +168,13 @@ export interface SignalSource {
   start(onSignal: (signal: Signal) => Promise<void>): Promise<{ stop(): Promise<void> }>;
 }
 
-/** Talking to people where the task started (issue, PR, chat thread). */
+/**
+ * Every message the factory posts carries this marker, so a factory that posts with a person's token
+ * (a PAT instead of a bot account) still never wakes itself.
+ */
+export const FACTORY_MARKER = "<!-- openfactory -->";
+
+/** Talking to people where the task started (issue, PR, chat thread). Implementations append FACTORY_MARKER. */
 export interface ChatSurface {
   readonly name: string;
   post(target: { repo: RepoRef; issueOrPr: number }, markdown: string): Promise<{ url: string }>;

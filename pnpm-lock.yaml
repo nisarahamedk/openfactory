@@ -125,6 +125,15 @@ importers:
         specifier: 0.45.4
         version: 0.45.4(@electric-sql/pglite@0.5.16)(postgres@3.4.9)
 
+  plugins/code-github:
+    dependencies:
+      '@octokit/webhooks-methods':
+        specifier: 6.0.0
+        version: 6.0.0
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+
   plugins/metrics-dxfake:
     dependencies:
       '@hono/node-server':
@@ -450,6 +459,10 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.6.0':
     resolution: {integrity: sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==}
+
+  '@octokit/webhooks-methods@6.0.0':
+    resolution: {integrity: sha512-MFlzzoDJVw/GcbfzVC1RLR36QqkTLUf79vLVO3D+xn7r0QgxnFoLZgtrzxiQErAjFUOdH6fas2KeQJ1yr/qaXQ==}
+    engines: {node: '>= 20'}
 
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
@@ -1581,6 +1594,8 @@ snapshots:
       hono: 4.10.4
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
+
+  '@octokit/webhooks-methods@6.0.0': {}
 
   '@protobufjs/aspromise@1.1.2': {}
 

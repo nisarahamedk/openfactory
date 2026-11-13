@@ -53,6 +53,7 @@ describe("decide", () => {
     expect(decide(task({ status: "merged" }), review, cfg).kind).toBe("ignore");
     expect(decide(task({ status: "failed" }), review, cfg).kind).toBe("retry");
     expect(decide(task({ status: "failed" }), issueComment, cfg).kind).toBe("retry");
+    expect(decide(task(), { ...review, body: "Ready for review <!-- openfactory -->" }, cfg).kind).toBe("ignore");
   });
 
   it("finalizes on merge and close", () => {
