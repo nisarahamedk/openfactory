@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { TaskRecord } from "@openfactory/contracts";
-import { FactoryApi } from "./api.js";
+import { FactoryApi } from "@openfactory/client";
 import { createDashboard } from "./app.js";
 import { rollup } from "./stats.js";
 
