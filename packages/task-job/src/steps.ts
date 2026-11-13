@@ -2,8 +2,8 @@
  * The steps of a task's life. Each is safe to run again after a crash: it
  * checks the ledger and the outside world before acting.
  */
-import { Evidence, type EnvironmentHandle, type TaskId, type TaskRecord, type WorkspaceHandle } from "@openfactory/contracts";
-import { readyForReview } from "@openfactory/rules";
+import { Evidence, TestUser, type EnvironmentHandle, type RepoRef, type TaskId, type TaskRecord, type WorkspaceHandle } from "@openfactory/contracts";
+import { DEFAULT_RISK, mergeRisk, readyForReview } from "@openfactory/rules";
 import { mergeScores, runScorers } from "@openfactory/scoring";
 import { z } from "zod";
 import { branchFor, issueTarget, type JobDeps } from "./deps.js";
@@ -71,11 +71,46 @@ async function homeOf(ws: WorkspaceHandle): Promise<string> {
  * so an expired token is replaced. The sandbox's egress allowlist is the main control on what it can reach.
  */
 export async function giveGitAccess(deps: JobDeps, record: TaskRecord, ws: WorkspaceHandle): Promise<Record<string, string>> {
-  const { token } = await deps.codeForge.mintPushToken(record.source.repo);
   const home = await homeOf(ws);
-  await ws.writeFile(`${home}/.git-credentials`, `https://x-access-token:${token}@github.com\n`);
+  const scope = scopeRepos(record);
+  const { token } = await deps.codeForge.mintPushToken(record.source.repo);
+  // One credential line per repo (credential.useHttpPath), so each repo gets its own scoped token.
+  const lines = [`https://x-access-token:${token}@github.com/${record.source.repo.owner}/${record.source.repo.name}.git`];
+  for (const repo of scope.slice(1)) {
+    const t = await deps.codeForge.mintPushToken(repo);
+    lines.push(`https://x-access-token:${t.token}@github.com/${repo.owner}/${repo.name}.git`);
+  }
+  await ws.writeFile(`${home}/.git-credentials`, `${lines.join("\n")}\n`);
   await ws.exec(["git", "config", "--global", "credential.helper", `store --file=${home}/.git-credentials`]);
+  await ws.exec(["git", "config", "--global", "credential.useHttpPath", "true"]);
   return { GH_TOKEN: token, GH_REPO: `${record.source.repo.owner}/${record.source.repo.name}` };
+}
+
+/** The task's repos, primary first. */
+export function scopeRepos(record: TaskRecord): RepoRef[] {
+  const extra = (record.repos ?? []).map((x) => x.repo).filter((r) => `${r.owner}/${r.name}`.toLowerCase() !== `${record.source.repo.owner}/${record.source.repo.name}`.toLowerCase());
+  return [record.source.repo, ...extra];
+}
+
+/** Where a secondary repo is checked out in the workspace. */
+export function repoPath(home: string, repo: RepoRef): string {
+  return `${home}/repos/${repo.owner}-${repo.name}`;
+}
+
+/** Clone the task's other repos next to the primary checkout, on the task branch (idempotent). */
+export async function cloneScope(deps: JobDeps, record: TaskRecord, ws: WorkspaceHandle): Promise<void> {
+  const home = await homeOf(ws);
+  const branch = branchFor(deps, record);
+  for (const repo of scopeRepos(record).slice(1)) {
+    const dir = repoPath(home, repo);
+    const url = `https://github.com/${repo.owner}/${repo.name}.git`;
+    const script = `set -e
+if [ ! -d "${dir}/.git" ]; then mkdir -p "$(dirname "${dir}")"; git clone --quiet "${url}" "${dir}"; fi
+cd "${dir}"
+git fetch --quiet origin "${branch}" 2>/dev/null && git checkout --quiet -B "${branch}" "origin/${branch}" || git checkout --quiet -B "${branch}" "origin/${deps.config.baseBranch}" 2>/dev/null || git checkout --quiet -B "${branch}"`;
+    const r = await ws.exec(["sh", "-c", script]);
+    if (r.exitCode !== 0) throw new Error(`could not check out ${repo.owner}/${repo.name}: ${r.stderr.slice(0, 500)}`);
+  }
 }
 
 export async function attach(deps: JobDeps, record: TaskRecord): Promise<{ ws: WorkspaceHandle; env: EnvironmentHandle }> {
@@ -128,7 +163,7 @@ export async function recordPrStats(deps: JobDeps, taskId: TaskId): Promise<void
   try {
     const record = await mustTask(deps, taskId);
     if (!record.pr) return;
-    const st = await deps.codeForge.pullRequestStats(record.source.repo, record.pr.number);
+    const { files: _files, ...st } = await deps.codeForge.pullRequestStats(record.source.repo, record.pr.number);
     await deps.ledger.append(taskId, "pr_stats", st, { dedupeKey: `pr_stats:${taskId}:${st.headSha}` });
   } catch (e) {
     deps.log("pr stats failed", { taskId, error: describeError(e) });
@@ -183,7 +218,10 @@ export async function runTurn(
   const session = await deps.agent.openSession({
     workspace: ws,
     cwd: ws.repoPath,
-    systemPrompt: systemPrompt(record, branchFor(deps, record), skill, deps.config.baseBranch),
+    systemPrompt: systemPrompt(record, branchFor(deps, record), skill, deps.config.baseBranch, {
+      otherRepos: scopeRepos(record).slice(1).map((r) => ({ name: `${r.owner}/${r.name}`, path: repoPath("$HOME", r) })),
+      versionNote: deps.config.versionPrompts?.[record.factoryVersion] ?? "",
+    }),
     resumeSessionId: record.harnessSessionId,
     model: record.harness.model,
     env: {
@@ -193,6 +231,7 @@ export async function runTurn(
       ...(await giveGitAccess(deps, record, ws)),
     },
   });
+  await cloneScope(deps, record, ws);
   if (session.sessionId !== record.harnessSessionId)
     await deps.ledger.append(taskId, "session_started", { sessionId: session.sessionId });
   const turn = (await deps.ledger.events(taskId)).filter((e) => e.type === "turn_started").length + 1;
@@ -257,7 +296,58 @@ export async function ensurePr(deps: JobDeps, taskId: TaskId, summary: string): 
     moved = true;
   }
   if (moved) await recordPrStats(deps, taskId);
+  return ensureOtherPrs(deps, taskId);
+}
+
+/** Record the PRs the agent opened in the task's other repos (one per repo; the agent opens them). */
+async function ensureOtherPrs(deps: JobDeps, taskId: TaskId): Promise<TaskRecord> {
+  let record = await mustTask(deps, taskId);
+  const branch = branchFor(deps, record);
+  for (const repo of scopeRepos(record).slice(1)) {
+    try {
+      const pr = await deps.codeForge.findPullRequestForBranch(repo, branch);
+      if (!pr) continue;
+      const known = (record.repos ?? []).find((x) => x.repo.owner === repo.owner && x.repo.name === repo.name)?.pr ?? null;
+      if (!known || known.number !== pr.number)
+        record = (await deps.ledger.append(taskId, "pr_opened", { number: pr.number, url: pr.url, headSha: pr.headSha || null, repo })).record;
+      else if (pr.headSha && pr.headSha !== known.headSha)
+        record = (await deps.ledger.append(taskId, "pushed", { sha: pr.headSha, byFactory: true, repo }, { dedupeKey: `pushed:${taskId}:${repo.owner}/${repo.name}:${pr.headSha}` })).record;
+    } catch (e) {
+      deps.log("other repo PR check failed", { taskId, repo: `${repo.owner}/${repo.name}`, error: describeError(e) });
+    }
+  }
   return record;
+}
+
+/** Assess and label merge risk for the primary PR's head (once per head). Never throws. */
+export async function assessRisk(deps: JobDeps, taskId: TaskId): Promise<void> {
+  try {
+    const record = await mustTask(deps, taskId);
+    if (!record.pr?.headSha || !deps.codeForge.pullRequestStats) return;
+    if (record.risk?.headSha === record.pr.headSha) return;
+    const st = await deps.codeForge.pullRequestStats(record.source.repo, record.pr.number);
+    const events = await deps.ledger.events(taskId);
+    const ci = events
+      .filter((e) => e.type === "ci_completed" && (e.data as { headSha?: string }).headSha === st.headSha)
+      .map((e) => String((e.data as { conclusion?: string }).conclusion));
+    const head = st.headSha;
+    const risk = mergeRisk(
+      {
+        headSha: head,
+        additions: st.additions,
+        deletions: st.deletions,
+        files: st.files ?? [],
+        ci,
+        evidenceForHead: record.evidence.some((e) => head.startsWith(e.commitSha) || e.commitSha.startsWith(head)),
+        reviewRounds: record.people.reviewRounds,
+      },
+      deps.config.risk ?? DEFAULT_RISK,
+    );
+    await deps.ledger.append(taskId, "merge_risk", risk, { dedupeKey: `merge_risk:${taskId}:${head}` });
+    await deps.codeForge.setPrefixedLabels?.(record.source.repo, record.pr.number, "risk:", [`risk:${risk.level}`]);
+  } catch (e) {
+    deps.log("merge risk failed", { taskId, error: describeError(e) });
+  }
 }
 
 const ManifestEntry = z.object({
@@ -267,6 +357,8 @@ const ManifestEntry = z.object({
   url: z.string().optional(),
   commitSha: z.string(),
   environment: z.string(),
+  testUser: TestUser.optional(),
+  repo: z.string().optional(),
 });
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -301,8 +393,9 @@ export async function collectEvidence(deps: JobDeps, taskId: TaskId): Promise<nu
   }
   let added = 0;
   for (const e of entries) {
-    let url = e.url ?? "";
-    if (e.file) {
+    if (e.kind === "test-user" && !e.testUser) continue;
+    let url = e.kind === "test-user" ? (e.testUser?.loginUrl ?? "") : (e.url ?? "");
+    if (e.file && e.kind !== "test-user") {
       const path = e.file.startsWith("/") ? e.file : `${dir}/${e.file}`;
       const name = `${e.commitSha.slice(0, 12)}-${path.split("/").pop()}`;
       if (record.evidence.some((x) => x.url.endsWith(`/${name}`))) continue;
@@ -313,7 +406,16 @@ export async function collectEvidence(deps: JobDeps, taskId: TaskId): Promise<nu
     } else if (record.evidence.some((x) => x.url === url && x.commitSha === e.commitSha)) continue;
     if (!url) continue;
     await deps.ledger.append(taskId, "evidence_added", {
-      evidence: { kind: e.kind, title: e.title, url, commitSha: e.commitSha, environment: e.environment, createdAt: new Date().toISOString() },
+      evidence: {
+        kind: e.kind,
+        title: e.title,
+        url,
+        commitSha: e.commitSha,
+        environment: e.environment,
+        createdAt: new Date().toISOString(),
+        ...(e.testUser ? { testUser: e.testUser } : {}),
+        ...(e.repo ? { repo: e.repo } : {}),
+      },
     });
     added++;
   }
@@ -327,6 +429,7 @@ export function evidenceMarkdown(record: TaskRecord): string {
   return list
     .map((e) => {
       const tag = `\`${e.commitSha.slice(0, 7)}\` on \`${e.environment}\``;
+      if (e.kind === "test-user" && e.testUser) return `- **Log in as ${e.testUser.role}** (${e.testUser.state}): [sign in](${e.url}) (${tag})`;
       return e.kind === "screenshot" ? `**${e.title}** (${tag})\n\n![${e.title}](${e.url})` : `- [${e.title}](${e.url}) (${e.kind}, ${tag})`;
     })
     .join("\n\n");
@@ -340,7 +443,10 @@ export async function reviewGate(deps: JobDeps, taskId: TaskId, summary: string,
   await collectEvidence(deps, taskId);
   const record = await ensurePr(deps, taskId, summary);
   const ready = readyForReview(record);
-  if (ready.ok) return { kind: "ready" };
+  if (ready.ok) {
+    await assessRisk(deps, taskId);
+    return { kind: "ready" };
+  }
   if (nudges < deps.config.maxNudges)
     return {
       kind: "nudge",
@@ -355,8 +461,20 @@ export async function announceReview(deps: JobDeps, taskId: TaskId, summary: str
   const header = round === 0 ? "Ready for review." : `Review round ${round} addressed.`;
   await deps.chat.post(
     { repo: record.source.repo, issueOrPr: record.pr.number },
-    `${header} Head \`${record.pr.headSha?.slice(0, 7) ?? "?"}\`, environment \`${record.environment?.name ?? "?"}\`.\n\n${summary.slice(0, 3000)}\n\n### Evidence\n\n${evidenceMarkdown(record)}\n\n<sub>factory task \`${record.id}\` · cost so far $${record.usage.costUsd.toFixed(2)}</sub>`,
+    `${header} Head \`${record.pr.headSha?.slice(0, 7) ?? "?"}\`, environment \`${record.environment?.name ?? "?"}\`.${riskLine(record)}${otherPrsLine(record)}\n\n${summary.slice(0, 3000)}\n\n### Evidence\n\n${evidenceMarkdown(record)}\n\n<sub>factory task \`${record.id}\` · factory \`${record.factoryVersion}\`${record.versionArm === "candidate" ? " (candidate)" : ""} · ${record.harness.model} · cost so far $${record.usage.costUsd.toFixed(2)}</sub>`,
   );
+}
+
+function riskLine(record: TaskRecord): string {
+  const r = record.risk;
+  if (!r || r.headSha !== record.pr?.headSha) return "";
+  return `\n\n**Merge risk: ${r.level}.** ${r.reasons.join("; ")}.`;
+}
+
+function otherPrsLine(record: TaskRecord): string {
+  const others = (record.repos ?? []).slice(1).filter((x) => x.pr);
+  if (!others.length) return "";
+  return `\n\nThis task also changed: ${others.map((x) => `[${x.repo.owner}/${x.repo.name}#${x.pr!.number}](${x.pr!.url})`).join(", ")}. Merge them together.`;
 }
 
 export async function fail(deps: JobDeps, taskId: TaskId, stage: string, message: string): Promise<void> {

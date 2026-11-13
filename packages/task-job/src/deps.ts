@@ -10,7 +10,7 @@ import type {
   Workspace,
 } from "@openfactory/contracts";
 import type { Ledger } from "@openfactory/ledger";
-import type { RulesConfig } from "@openfactory/rules";
+import type { RiskConfig, RulesConfig } from "@openfactory/rules";
 
 /** Where evidence files copied out of the sandbox are kept and served from. */
 export interface EvidenceStore {
@@ -48,6 +48,10 @@ export type JobDeps = {
     /** Max nudge turns when a turn ends without a PR or evidence. */
     maxNudges: number;
     branchPrefix: string; // "factory/"
+    /** Merge-risk rules (paths, size thresholds); null: the defaults. */
+    risk?: RiskConfig | null;
+    /** Extra system-prompt text per factory version (how a candidate version differs). */
+    versionPrompts?: Record<string, string>;
   };
   log: Log;
 };

@@ -9,9 +9,9 @@ import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import { createRegistry, defineExtension, Harness, type Conversation, type TaskId as PdTaskId } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import type { Signal, TaskId, TaskRecord } from "@openfactory/contracts";
+import type { RepoRef, Signal, TaskId, TaskRecord } from "@openfactory/contracts";
 import { askForeman, FOREMAN_INSTRUCTIONS } from "@openfactory/foreman";
-import { decide, isTerminal, pickModel, type Action, type ModelRouting } from "@openfactory/rules";
+import { decide, isTerminal, pickModel, pickVersion, planScope, type Action, type ModelRouting, type Rollout } from "@openfactory/rules";
 import { issueTarget, type JobDeps } from "./deps.js";
 import { describeError, scoreAndExport, sleepAll } from "./steps.js";
 import { jobTasks, type JobTasks } from "./tasks.js";
@@ -24,6 +24,12 @@ export type TaskJobsOptions = {
   harnessInfo: { name: string; model: string };
   /** Which worker model a new task gets (factory.yaml `models:`). Null: always harnessInfo.model. */
   modelRouting?: ModelRouting | null;
+  /** A candidate factory version served to a share of new tasks (factory.yaml `rollout:`). */
+  rollout?: Rollout | null;
+  /** Model routing per factory version, when a version changes it. */
+  versionModels?: Record<string, ModelRouting>;
+  /** Every repo the factory may work in; an issue that names one of them adds it to the task's scope. */
+  knownRepos?: RepoRef[];
 };
 
 type Open = { h: Harness; root: Conversation };
@@ -131,12 +137,13 @@ export class TaskJobs {
         return action;
       case "start_task": {
         if (signal.type !== "issue_labeled") return action;
-        const routed = this.opts.modelRouting
-          ? pickModel({ title: signal.title, labels: signal.labels ?? [signal.label] }, this.opts.modelRouting)
-          : { model: this.opts.harnessInfo.model, reason: "default" };
+        const version = this.opts.rollout ? pickVersion(signal.id, this.opts.rollout) : { version: this.opts.factoryVersion(), arm: "stable" as const };
+        const routing = this.opts.versionModels?.[version.version] ?? this.opts.modelRouting;
+        const labels = signal.labels ?? [signal.label];
+        const routed = routing ? pickModel({ title: signal.title, labels }, routing) : { model: this.opts.harnessInfo.model, reason: "default" };
         const { record, appended } = await l.createTask({
           id: newTaskId(),
-          factoryVersion: this.opts.factoryVersion(),
+          factoryVersion: version.version,
           source: {
             kind: "github_issue",
             repo: signal.repo,
@@ -151,6 +158,11 @@ export class TaskJobs {
         });
         if (!appended) return { ...action, taskId: record.id };
         this.deps.log("model routed", { taskId: record.id, issue: signal.issueNumber, model: routed.model, reason: routed.reason });
+        if (this.opts.rollout?.candidate)
+          await l.append(record.id, "version_routed", { version: version.version, arm: version.arm, share: this.opts.rollout.share });
+        const scope = planScope(signal.repo, { title: signal.title, body: signal.body, labels }, this.opts.knownRepos ?? []);
+        if (scope.repos.length > 1)
+          await l.append(record.id, "scope_planned", { repos: scope.repos.map((r) => ({ host: "github" as const, owner: r.owner, name: r.name })), reason: scope.reason });
         await this.create(record.id, (t) => ({ def: t.Intake, input: { taskId: record.id } }));
         void this.foremanSay(record.id, "ack", "", `ack:${signal.id}`);
         return { ...action, taskId: record.id };

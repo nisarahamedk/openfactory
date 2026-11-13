@@ -97,7 +97,22 @@ export class GitHubCodeForge implements CodeForge {
 
   async pullRequestStats(repo: RepoRef, number: number) {
     const p = await this.gh.request<{ head: { sha: string }; additions: number; deletions: number; changed_files: number }>("GET", `${r(repo)}/pulls/${number}`);
-    return { headSha: p.head.sha, additions: p.additions, deletions: p.deletions, changedFiles: p.changed_files };
+    const files: string[] = [];
+    for (let page = 1; page <= 3; page++) {
+      const batch = await this.gh.request<{ filename: string }[]>("GET", `${r(repo)}/pulls/${number}/files?per_page=100&page=${page}`);
+      files.push(...batch.map((f) => f.filename));
+      if (batch.length < 100) break;
+    }
+    return { headSha: p.head.sha, additions: p.additions, deletions: p.deletions, changedFiles: p.changed_files, files };
+  }
+
+  async setPrefixedLabels(repo: RepoRef, number: number, prefix: string, labels: string[]) {
+    const current = await this.gh.request<{ name: string }[]>("GET", `${r(repo)}/issues/${number}/labels`);
+    for (const l of current)
+      if (l.name.startsWith(prefix) && !labels.includes(l.name))
+        await this.gh.request("DELETE", `${r(repo)}/issues/${number}/labels/${encodeURIComponent(l.name)}`).catch(() => {});
+    const missing = labels.filter((l) => !current.some((c) => c.name === l));
+    if (missing.length) await this.gh.request("POST", `${r(repo)}/issues/${number}/labels`, { labels: missing });
   }
 
   /** With a PAT this is the PAT itself; a GitHub App deployment swaps in installation tokens here. */
