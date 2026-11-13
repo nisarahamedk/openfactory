@@ -1,11 +1,15 @@
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import { TaskId, type LedgerEvent, type TaskRecord } from "@openfactory/contracts";
-import { FactoryApiError, type FactoryApi } from "@openfactory/client";
-import { filterTasks, inbox, insights, isOpen, parseFilter, summarizeScorers, taskFacts, type TaskFacts } from "./insights.js";
-import { BenchPage, ErrorPage, FactoryPage, HomePage, Layout, MetricsPage, parseTranscript, RunsPage, ScorersPage, TaskPage, TranscriptPage, VersionsPage } from "./views.js";
+import { FactoryApiError, type FactoryApi, type FactoryInfo } from "@openfactory/client";
+import type { Child } from "hono/jsx";
+import { dailySeries, filterTasks, inbox, insights, isOpen, parseFilter, summarizeScorers, taskFacts, type TaskFacts } from "./insights.js";
+import { Shell, type Nav } from "./ui.js";
+import { ActivityPage, AgentPage, AgentsPage, AppsPage, AutomationsPage, BenchPage, DashboardPage, EnvironmentsPage, ErrorPage, parseTranscript, RunsPage, ScorersPage, SecretsPage, TaskPage, TranscriptPage, VersionsPage, type Stage } from "./views.js";
 
 /**
  * Event logs per task, refetched only when the task's updatedAt moves. Terminal tasks
@@ -39,11 +43,14 @@ export class EventCache {
 }
 
 /**
- * The factory page: tasks, cost, scores, factory versions and benchmarks.
+ * The factory dashboard: runs, activity, cost and outcomes, agents, scorers and benchmarks.
  * Server-rendered; every read and write goes through the factory server's API.
  * Basic auth protects the whole page when a password is set.
  */
-export function createDashboard(api: FactoryApi, opts: { password: string | null; models: [string, string]; now?: () => string }): Hono {
+export function createDashboard(
+  api: FactoryApi,
+  opts: { password: string | null; models: [string, string]; now?: () => string; factoryName?: string; mcpUrl?: string | null },
+): Hono {
   const app = new Hono();
   const cache = new EventCache(api);
   const now = opts.now ?? (() => new Date().toISOString());
@@ -52,68 +59,110 @@ export function createDashboard(api: FactoryApi, opts: { password: string | null
     const tasks = await api.listTasks({ limit: LIMIT });
     return { tasks, facts: await cache.facts(tasks) };
   };
+  // The factory's config changes only on deploy; refetch at most once a minute and never fail a page on it.
+  let info: { at: number; f: FactoryInfo | null } = { at: 0, f: null };
+  const factory = async (): Promise<FactoryInfo | null> => {
+    if (Date.now() - info.at > 60_000) {
+      try {
+        info = { at: Date.now(), f: await api.factory() };
+      } catch {
+        info = { at: Date.now() - 50_000, f: info.f };
+      }
+    }
+    return info.f;
+  };
+  const requireFactory = async () => {
+    const f = await factory();
+    if (f === null) throw new FactoryApiError(502, "The factory server did not return its configuration.");
+    return f;
+  };
+  const name = opts.factoryName ?? "main";
+  const page = async (c: { req: { query(k: string): string | undefined } }, p: { title: string; nav: Nav; inboxCount?: number; refreshSec?: number | undefined; flash?: string | null }, body: Child) => {
+    const f = await factory();
+    return (
+      <Shell title={p.title} nav={p.nav} flash={p.flash === undefined ? (c.req.query("msg") ?? null) : p.flash} inboxCount={p.inboxCount} refreshSec={p.refreshSec} factory={{ name, version: f?.version ?? "" }}>
+        {body}
+      </Shell>
+    );
+  };
   const inboxCount = (facts: TaskFacts[]) => inbox(facts, now()).length;
+  const days = (q: string | undefined) => ([7, 30, 90].includes(Number(q)) ? Number(q) : 30);
+
   app.get("/healthz", (c) => c.json({ ok: true }));
+  const fontPath = createRequire(import.meta.url).resolve("@fontsource-variable/inter/files/inter-latin-wght-normal.woff2");
+  let font: Buffer | null = null;
+  app.get("/assets/inter.woff2", async (c) => {
+    font ??= await readFile(fontPath);
+    return c.body(new Uint8Array(font), 200, { "content-type": "font/woff2", "cache-control": "public, max-age=31536000, immutable" });
+  });
   if (opts.password !== null) app.use("*", basicAuth({ username: "factory", password: opts.password }));
 
-  app.onError((err, c) => {
+  app.onError(async (err, c) => {
     if (err instanceof HTTPException) return err.getResponse();
     const msg = err instanceof FactoryApiError ? err.message : err instanceof z.ZodError ? "The factory server returned data in an unexpected shape." : "Unexpected error.";
     if (!(err instanceof FactoryApiError)) console.error("dashboard:", err);
-    return c.html(<Layout title="Error" nav="home" flash={null}><ErrorPage message={msg} /></Layout>, 502);
+    return c.html(<Shell title="Error" nav="dashboard" flash={null} factory={{ name, version: info.f?.version ?? "" }}><ErrorPage message={msg} /></Shell>, 502);
   });
-
-  const flash = (c: { req: { query(k: string): string | undefined } }) => c.req.query("msg") ?? null;
 
   app.get("/", async (c) => {
     const { facts } = await loadAll();
+    const d = days(c.req.query("days"));
+    return c.html(await page(c, { title: "Dashboard", nav: "dashboard", inboxCount: inboxCount(facts) }, <DashboardPage i={insights(facts, now(), d)} days={dailySeries(facts, now(), d)} now={now()} />));
+  });
+  app.get("/metrics", (c) => c.redirect(`/${c.req.query("days") ? `?days=${c.req.query("days")}` : ""}`, 301));
+
+  app.get("/activity", async (c) => {
+    const { facts } = await loadAll();
     const items = inbox(facts, now());
-    const live = facts.filter((f) => isOpen(f.task.status) && f.task.status !== "awaiting_review");
-    return c.html(
-      <Layout title="Home" nav="home" flash={flash(c)} inboxCount={items.length} refreshSec={live.length > 0 ? 20 : undefined}>
-        <HomePage items={items} live={live} now={now()} i={insights(facts, now(), 7)} />
-      </Layout>,
-    );
+    const q = c.req.query("stage");
+    const stage: Stage = q === "needs_you" || q === "working" || q === "review" || q === "merged" || q === "ended" ? q : "all";
+    const live = facts.some((f) => isOpen(f.task.status) && f.task.status !== "awaiting_review");
+    return c.html(await page(c, { title: "Activity", nav: "activity", inboxCount: items.length, refreshSec: live ? 20 : undefined }, <ActivityPage items={items} facts={facts} now={now()} stage={stage} />));
   });
 
   app.get("/runs", async (c) => {
     const { tasks, facts } = await loadAll();
     const filter = parseFilter((k) => c.req.query(k));
     const live = c.req.query("live") === "1";
+    const nav: Nav = c.req.query("scope") === "factory" ? "factory-runs" : "runs";
     return c.html(
-      <Layout title="Runs" nav="runs" flash={flash(c)} inboxCount={inboxCount(facts)} refreshSec={live ? 15 : undefined}>
-        <RunsPage tasks={filterTasks(tasks, filter)} all={tasks} filter={filter} facts={new Map(facts.map((f) => [f.task.id, f]))} now={now()} live={live} />
-      </Layout>,
+      await page(c, { title: "Runs", nav, inboxCount: inboxCount(facts), refreshSec: live ? 15 : undefined },
+        <RunsPage tasks={filterTasks(tasks, filter)} all={tasks} filter={filter} facts={new Map(facts.map((f) => [f.task.id, f]))} now={now()} live={live} />),
     );
   });
 
-  app.get("/metrics", async (c) => {
-    const days = [7, 30, 90].includes(Number(c.req.query("days"))) ? Number(c.req.query("days")) : 30;
-    const { facts } = await loadAll();
-    return c.html(<Layout title="Dashboard" nav="metrics" flash={flash(c)} inboxCount={inboxCount(facts)}><MetricsPage i={insights(facts, now(), days)} /></Layout>);
-  });
-
   app.get("/scorers", async (c) => {
-    const tasks = await api.listTasks({ limit: LIMIT });
-    return c.html(<Layout title="Scorers" nav="scorers" flash={flash(c)}><ScorersPage scorers={summarizeScorers(tasks)} /></Layout>);
+    const { facts } = await loadAll();
+    return c.html(await page(c, { title: "Scorers", nav: "scorers", inboxCount: inboxCount(facts) }, <ScorersPage scorers={summarizeScorers(facts.map((f) => f.task))} />));
   });
 
   app.get("/versions", async (c) => {
-    const tasks = await api.listTasks({ limit: LIMIT });
-    return c.html(<Layout title="Factory versions" nav="versions" flash={flash(c)}><VersionsPage tasks={tasks} /></Layout>);
+    const { tasks, facts } = await loadAll();
+    return c.html(await page(c, { title: "Versions", nav: "versions", inboxCount: inboxCount(facts) }, <VersionsPage tasks={tasks} />));
   });
+
+  app.get("/agents", async (c) => c.html(await page(c, { title: "Agents", nav: "agents" }, <AgentsPage f={await requireFactory()} />)));
+  app.get("/agents/:role", async (c) => {
+    const role = c.req.param("role");
+    if (role !== "implementation" && role !== "foreman") return c.html(await page(c, { title: "Not found", nav: "agents", flash: null }, <ErrorPage message="No such agent." />), 404);
+    return c.html(await page(c, { title: role, nav: "agents" }, <AgentPage f={await requireFactory()} role={role} prompt={c.req.query("prompt") ?? "system"} mcpUrl={opts.mcpUrl ?? null} />));
+  });
+  app.get("/automations", async (c) => c.html(await page(c, { title: "Automations", nav: "automations" }, <AutomationsPage f={await requireFactory()} />)));
+  app.get("/apps", async (c) => c.html(await page(c, { title: "MCPs and apps", nav: "apps" }, <AppsPage f={await requireFactory()} mcpUrl={opts.mcpUrl ?? null} />)));
+  app.get("/secrets", async (c) => c.html(await page(c, { title: "Secrets", nav: "secrets" }, <SecretsPage f={await requireFactory()} />)));
+  app.get("/environments", async (c) => {
+    const [f, tasks] = await Promise.all([requireFactory(), api.listTasks({ limit: LIMIT })]);
+    return c.html(await page(c, { title: "Environments", nav: "environments" }, <EnvironmentsPage f={f} active={tasks.filter((t) => isOpen(t.status) && t.environment !== null)} />));
+  });
+  app.get("/factory", (c) => c.redirect("/agents", 301));
 
   app.get("/tasks/:id", async (c) => {
     const id = TaskId.safeParse(c.req.param("id"));
     const t = id.success ? await api.getTask(id.data) : null;
-    if (!id.success || t === null) return c.html(<Layout title="Not found" nav="runs" flash={null}><ErrorPage message="No such task." /></Layout>, 404);
+    if (!id.success || t === null) return c.html(await page(c, { title: "Not found", nav: "runs", flash: null }, <ErrorPage message="No such task." />), 404);
     const events = await cache.events(t);
     const live = isOpen(t.status) && t.status !== "awaiting_review";
-    return c.html(
-      <Layout title={t.title} nav="runs" flash={flash(c)} refreshSec={live ? 15 : undefined}>
-        <TaskPage t={t} events={events} facts={taskFacts(t, events)} now={now()} />
-      </Layout>,
-    );
+    return c.html(await page(c, { title: t.title, nav: "runs", refreshSec: live ? 15 : undefined }, <TaskPage t={t} events={events} facts={taskFacts(t, events)} now={now()} />));
   });
 
   app.get("/tasks/:id/transcripts/:key", async (c) => {
@@ -121,9 +170,9 @@ export function createDashboard(api: FactoryApi, opts: { password: string | null
     const key = c.req.param("key");
     const t = id.success ? await api.getTask(id.data) : null;
     const body = t !== null && /^transcript-\d+\.jsonl$/.test(key) ? await api.transcript(t.id, key) : null;
-    if (t === null || body === null) return c.html(<Layout title="Not found" nav="runs" flash={null}><ErrorPage message="No such transcript." /></Layout>, 404);
+    if (t === null || body === null) return c.html(await page(c, { title: "Not found", nav: "runs", flash: null }, <ErrorPage message="No such transcript." />), 404);
     const turn = Number(/^transcript-(\d+)/.exec(key)?.[1] ?? NaN);
-    return c.html(<Layout title={`Session · ${t.title}`} nav="runs" flash={null}><TranscriptPage t={t} turn={Number.isFinite(turn) ? turn : null} lines={parseTranscript(body)} /></Layout>);
+    return c.html(await page(c, { title: `Session · ${t.title}`, nav: "runs", flash: null }, <TranscriptPage t={t} turn={Number.isFinite(turn) ? turn : null} lines={parseTranscript(body)} />));
   });
 
   app.post("/tasks/:id/cancel", async (c) => {
@@ -138,11 +187,6 @@ export function createDashboard(api: FactoryApi, opts: { password: string | null
         return c.redirect(`/tasks/${id}?msg=${encodeURIComponent(`Couldn't stop: ${err.message}`)}`, 303);
       throw err;
     }
-  });
-
-  app.get("/factory", async (c) => {
-    const f = await api.factory();
-    return c.html(<Layout title="Factory" nav="factory" flash={flash(c)}><FactoryPage f={f} /></Layout>);
   });
 
   app.post("/tasks/:id/benchmark", async (c) => {
@@ -160,7 +204,7 @@ export function createDashboard(api: FactoryApi, opts: { password: string | null
   app.get("/bench", async (c) => {
     const [tasks, runs, all] = await Promise.all([api.benchTasks(), api.benchRuns(), api.listTasks({ limit: 500 })]);
     const versions = [...new Set(all.map((t) => t.factoryVersion))];
-    return c.html(<Layout title="Benchmarks" nav="bench" flash={flash(c)}><BenchPage tasks={tasks} runs={runs} versions={versions} models={opts.models} /></Layout>);
+    return c.html(await page(c, { title: "Benchmarks", nav: "bench" }, <BenchPage tasks={tasks} runs={runs} versions={versions} models={opts.models} />));
   });
 
   app.post("/bench/runs", async (c) => {
