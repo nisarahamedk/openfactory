@@ -41,6 +41,8 @@ export const EventData = {
   version_routed: z.object({ version: z.string(), arm: z.enum(["stable", "candidate"]), share: z.number() }),
   /** Merge-risk assessment of the primary PR at a head. */
   merge_risk: MergeRisk,
+  /** The team factory a task runs on (its asker's team, else the repo's team, else "default"). */
+  factory_assigned: z.object({ factory: z.string(), team: z.string().nullable() }),
   /** A new PR head. `byFactory: false` means someone else pushed between agent turns (autonomy = merged with none). */
   pushed: z.object({ sha: z.string(), byFactory: z.boolean().optional(), repo: RepoRef.optional() }),
   /** PR size at a head (recorded when the PR opens, on each factory push, and at merge). */
@@ -172,6 +174,8 @@ export function apply(record: TaskRecord, event: LedgerEvent): TaskRecord {
       const e = d as EventDataOf<"version_routed">;
       return { ...r, factoryVersion: e.version, versionArm: e.arm };
     }
+    case "factory_assigned":
+      return { ...r, factory: (d as EventDataOf<"factory_assigned">).factory };
     case "merge_risk":
       return { ...r, risk: d as EventDataOf<"merge_risk"> };
     case "cost_adjusted":

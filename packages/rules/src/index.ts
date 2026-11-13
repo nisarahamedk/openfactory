@@ -198,7 +198,24 @@ export type RiskConfig = {
   /** Lines changed above which a PR is medium / high risk. */
   mediumLines: number;
   highLines: number;
+  /** Path patterns (regex source) that are safe on their own (docs...): a PR touching only these is low risk unless CI fails. */
+  safePaths?: string[];
 };
+
+/** A path glob (`src/payments/**`, `**\/*.md`) as a regex source. */
+export function globToRegex(glob: string): string {
+  let out = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === "*" && glob[i + 1] === "*") {
+      out += glob[i + 2] === "/" ? "(?:.*/)?" : ".*";
+      i += glob[i + 2] === "/" ? 2 : 1;
+    } else if (c === "*") out += "[^/]*";
+    else if (c === "?") out += "[^/]";
+    else out += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return `^${out}$`;
+}
 
 export const DEFAULT_RISK: RiskConfig = {
   riskyPaths: [
@@ -259,6 +276,11 @@ export function mergeRisk(input: RiskInput, cfg: RiskConfig = DEFAULT_RISK): { l
   if (input.reviewRounds >= 3) {
     score += 1;
     reasons.push(`${input.reviewRounds} review rounds`);
+  }
+  const safe = (cfg.safePaths ?? []).map((p) => new RegExp(p, "i"));
+  const ciFailed = input.ci.some((c) => c === "failure" || c === "timed_out");
+  if (safe.length && input.files.length && !ciFailed && input.files.every((f) => safe.some((p) => p.test(f)))) {
+    return { level: "low", reasons: ["only touches paths this factory treats as safe"], headSha: input.headSha };
   }
   const level = score >= 3 ? "high" : score >= 1 ? "medium" : "low";
   if (level === "low") reasons.push(`${lines} lines, no sensitive paths, evidence for head`);

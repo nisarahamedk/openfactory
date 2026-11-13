@@ -2,7 +2,7 @@
  * The steps of a task's life. Each is safe to run again after a crash: it
  * checks the ledger and the outside world before acting.
  */
-import { Evidence, TestUser, type EnvironmentHandle, type RepoRef, type TaskId, type TaskRecord, type WorkspaceHandle } from "@openfactory/contracts";
+import { Evidence, TestUser, type EnvironmentHandle, type RepoRef, type TaskId, type TaskRecord, type WorkspaceHandle, type WorldCheck } from "@openfactory/contracts";
 import { DEFAULT_RISK, mergeRisk, readyForReview } from "@openfactory/rules";
 import { mergeScores, runScorers } from "@openfactory/scoring";
 import { z } from "zod";
@@ -341,7 +341,7 @@ export async function assessRisk(deps: JobDeps, taskId: TaskId): Promise<void> {
         evidenceForHead: record.evidence.some((e) => head.startsWith(e.commitSha) || e.commitSha.startsWith(head)),
         reviewRounds: record.people.reviewRounds,
       },
-      deps.config.risk ?? DEFAULT_RISK,
+      (record.factory && deps.factories?.[record.factory]?.risk) || deps.config.risk || DEFAULT_RISK,
     );
     await deps.ledger.append(taskId, "merge_risk", risk, { dedupeKey: `merge_risk:${taskId}:${head}` });
     await deps.codeForge.setPrefixedLabels?.(record.source.repo, record.pr.number, "risk:", [`risk:${risk.level}`]);
@@ -514,8 +514,21 @@ const worldRuns = new Map<string, Promise<void>>();
  * score). Returns the running promise (tests await it). Never throws.
  */
 export function startWorldCheck(deps: JobDeps, taskId: TaskId): Promise<void> {
-  const w = deps.world;
-  if (!w) return Promise.resolve();
+  const base = deps.world;
+  if (!base) return Promise.resolve();
+  const running = worldRuns.get(taskId);
+  if (running) return running;
+  return (async () => {
+    const rec = await deps.ledger.getTask(taskId);
+    const team = rec?.factory ? deps.factories?.[rec.factory] : undefined;
+    // A team factory names its own world, or none; otherwise the org's.
+    const w = team && team.world !== undefined ? (team.world ? { ...base, ...team.world } : null) : base;
+    if (!w) return;
+    await runWorld(deps, taskId, w);
+  })();
+}
+
+function runWorld(deps: JobDeps, taskId: TaskId, w: { check: WorldCheck; world: string; simDays: number }): Promise<void> {
   const running = worldRuns.get(taskId);
   if (running) return running; // one world at a time per task; the next settle picks up a newer head
   const run = (async () => {

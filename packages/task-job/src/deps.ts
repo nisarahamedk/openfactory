@@ -42,6 +42,8 @@ export type JobDeps = {
   scorers: Scorer[];
   /** Run the product forward in a simulated world against each settled PR head (optional; slow, runs in the background). */
   world?: { check: WorldCheck; world: string; simDays: number } | null;
+  /** Per team factory: its world (null: none) and merge-risk rules. Missing: the org defaults above. */
+  factories?: Record<string, { world?: { world: string; simDays: number } | null; risk?: RiskConfig }>;
   sinks: MetricsSink[];
   config: {
     baseBranch: string;

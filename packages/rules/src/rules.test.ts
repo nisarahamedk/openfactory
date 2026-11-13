@@ -109,12 +109,16 @@ describe("pickVersion, mergeRisk, planScope", async () => {
     expect(pickVersion("x", r)).toEqual(pickVersion("x", r));
     expect(pickVersion("x", { ...r, candidate: null }).arm).toBe("stable");
   });
-  it("labels risk from size, paths, CI and evidence", () => {
+  it("labels risk from size, paths, CI and evidence", async () => {
     const base = { headSha: "h", additions: 40, deletions: 5, files: ["src/components/site/Faq.tsx"], ci: ["success"], evidenceForHead: true, reviewRounds: 0 };
     expect(mergeRisk(base).level).toBe("low");
     expect(mergeRisk({ ...base, files: ["drizzle/0012_add.sql"] }).level).toBe("medium");
     expect(mergeRisk({ ...base, files: ["drizzle/0012_add.sql"], ci: ["failure"] }).level).toBe("high");
     expect(mergeRisk({ ...base, evidenceForHead: false }).reasons).toContain("no evidence for this head");
+    const { globToRegex, DEFAULT_RISK } = await import("./index.js");
+    const team = { ...DEFAULT_RISK, riskyPaths: [globToRegex("src/payments/**")], safePaths: [globToRegex("docs/**"), globToRegex("**/*.md")] };
+    expect(mergeRisk({ ...base, files: ["src/payments/ledger.ts"] }, team).level).toBe("medium");
+    expect(mergeRisk({ ...base, additions: 900, files: ["docs/a.md", "README.md"] }, team).level).toBe("low");
   });
   it("adds repos the issue names", () => {
     const p = { owner: "acme", name: "app" };

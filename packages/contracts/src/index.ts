@@ -158,6 +158,8 @@ export const TaskRecord = z.object({
   outcomes: z.array(Outcome),
   /** Who asked for the task (code-host login), when known. Optional: older records predate it. */
   requestedBy: z.string().nullable().optional(),
+  /** The factory (org default or a team factory) this task runs on. */
+  factory: z.string().optional(),
   /** Labels on the issue when the task started. */
   labels: z.array(z.string()).optional(),
   /** OpenWorld runs of the PR's heads, oldest first. */
