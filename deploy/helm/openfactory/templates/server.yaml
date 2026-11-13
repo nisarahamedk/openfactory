@@ -1,0 +1,225 @@
+{{- $gen := include "of.generatedSecret" . }}
+{{- $litellm := printf "http://%s:4000" (include "of.svc" (dict "root" . "name" "litellm")) }}
+{{- $ds := .Values.environments.devspace }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-data
+  labels: {{- include "of.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources: { requests: { storage: {{ .Values.persistence.size }} } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-server
+  labels: {{- include "of.labels" . | nindent 4 }}
+    app.kubernetes.io/name: server
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: server } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: server }
+      annotations:
+        checksum/factory: {{ toYaml .Values.factory | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-server
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.postgres.enabled }}
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ .Values.postgres.image }}
+          command: ["sh", "-c", "until pg_isready -h {{ include "of.svc" (dict "root" . "name" "postgres") }} -U factory; do sleep 2; done"]
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+      {{- end }}
+      containers:
+        - name: server
+          image: {{ include "of.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["apps/server/dist/main.js"]
+          ports: [{ containerPort: 3000, name: http }]
+          env:
+            - { name: PORT, value: "3000" }
+            - { name: PUBLIC_URL, value: {{ .Values.publicUrl | quote }} }
+            - { name: DATA_DIR, value: /data }
+            - { name: BENCH_DIR, value: /data/bench }
+            - { name: FACTORY_FILE, value: /etc/openfactory/factory.yaml }
+            - { name: FACTORY_REPOS, value: {{ required "repos: list at least one owner/name" (join "," .Values.repos) | quote }} }
+            - { name: FACTORY_LABEL, value: {{ .Values.label | quote }} }
+            - { name: BASE_BRANCH, value: {{ .Values.baseBranch | quote }} }
+            - { name: BOT_LOGINS, value: {{ join "," .Values.botLogins | quote }} }
+            - { name: SIGNALS, value: {{ .Values.signals.mode | quote }} }
+            - { name: POLL_INTERVAL_MS, value: {{ .Values.signals.pollIntervalMs | quote }} }
+            - { name: MAX_TASK_USD, value: {{ .Values.limits.maxTaskUsd | quote }} }
+            - { name: MAX_REVIEW_ROUNDS, value: {{ .Values.limits.maxReviewRounds | quote }} }
+            - { name: MAX_NUDGES, value: {{ .Values.limits.maxNudges | quote }} }
+            # Model gateway: LiteLLM serves /chat/completions and /v1/messages at its root.
+            - { name: MODEL_PROXY_URL, value: {{ $litellm | quote }} }
+            - { name: LITELLM_ADMIN_URL, value: {{ $litellm | quote }} }
+            - { name: FOREMAN_MODEL, value: {{ .Values.litellm.foremanModel | quote }} }
+            - { name: WORKER_MODEL, value: {{ .Values.litellm.workerModel | quote }} }
+            - { name: TASK_KEY_MODELS, value: {{ join "," .Values.litellm.taskKeyModels | quote }} }
+            - name: LITELLM_MASTER_KEY
+              valueFrom: { secretKeyRef: { name: {{ $gen }}, key: LITELLM_MASTER_KEY } }
+            - name: MODEL_PROXY_KEY
+              valueFrom: { secretKeyRef: { name: {{ $gen }}, key: LITELLM_MASTER_KEY } }
+            # Workspaces
+            - { name: WORKSPACE_NAMESPACE, value: {{ .Values.workspaces.namespace | quote }} }
+            - { name: WORKER_IMAGE, value: {{ .Values.workspaces.image | quote }} }
+            - { name: WORKSPACE_STORAGE, value: {{ .Values.workspaces.storage | quote }} }
+            {{- with .Values.workspaces.storageClass }}
+            - { name: WORKSPACE_STORAGE_CLASS, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.workspaces.runtimeClassName }}
+            - { name: WORKSPACE_RUNTIME_CLASS, value: {{ . | quote }} }
+            {{- end }}
+            - { name: WORKSPACE_CPU, value: {{ .Values.workspaces.resources.cpu | quote }} }
+            - { name: WORKSPACE_MEMORY, value: {{ .Values.workspaces.resources.memory | quote }} }
+            - { name: WORKSPACE_CPU_LIMIT, value: {{ .Values.workspaces.resources.cpuLimit | quote }} }
+            - { name: WORKSPACE_MEMORY_LIMIT, value: {{ .Values.workspaces.resources.memoryLimit | quote }} }
+            {{- if .Values.egress.enabled }}
+            - { name: WORKSPACE_EGRESS_PROXY, value: {{ include "of.proxyUrl" . | quote }} }
+            - { name: WORKSPACE_NO_PROXY, value: {{ .Values.egress.noProxy | quote }} }
+            - { name: WORKSPACE_EGRESS_ALLOW, value: {{ join "," .Values.egress.allow | quote }} }
+            {{- end }}
+            # Task environments (devEnvironment: devspace)
+            - { name: ENV_NAMESPACE_PREFIX, value: {{ $ds.namespacePrefix | quote }} }
+            - { name: ENV_APP_URL_TEMPLATE, value: {{ $ds.appUrlTemplate | default "http://{namespace}.invalid" | quote }} }
+            - { name: ENV_DEPLOY_COMMAND, value: {{ $ds.deployCommand | quote }} }
+            - { name: ENV_COPY_SECRETS, value: {{ join "," $ds.copySecrets | quote }} }
+            {{- $vars := list }}{{ range $k, $v := $ds.agentVars }}{{ $vars = append $vars (printf "%s=%s" $k $v) }}{{ end }}
+            - { name: ENV_AGENT_VARS, value: {{ join "," $vars | quote }} }
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: {{ include "of.dbSecret" . }}, key: {{ include "of.dbFactoryKey" . }} } }
+            - name: GITHUB_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.github.name }}, key: {{ .Values.secrets.github.key }} } }
+            # Clone token for the workspace's init container only; the agent container never mounts it.
+            - name: WORKSPACE_GIT_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.github.name }}, key: {{ .Values.secrets.github.key }} } }
+            {{- with .Values.secrets.githubWebhook.name }}
+            - name: GITHUB_WEBHOOK_SECRET
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: {{ $.Values.secrets.githubWebhook.key }} } }
+            {{- end }}
+            - name: FACTORY_API_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ $gen }}, key: FACTORY_API_TOKEN } }
+            {{- if .Values.dxfake.enabled }}
+            - { name: DXFAKE_URL, value: {{ printf "http://%s:8787" (include "of.svc" (dict "root" . "name" "dxfake")) | quote }} }
+            - name: DXFAKE_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ $gen }}, key: FACTORY_API_TOKEN } }
+            {{- end }}
+            {{- with .Values.server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - { name: data, mountPath: /data, subPath: server }
+            - { name: factory, mountPath: /etc/openfactory }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          resources: {{- toYaml .Values.server.resources | nindent 12 }}
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: {{ .Release.Name }}-data } }
+        - { name: factory, configMap: { name: {{ .Release.Name }}-factory } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-server
+  labels: {{- include "of.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: server }
+  ports: [{ port: 3000, targetPort: http, name: http }]
+{{- if .Values.dashboard.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-dashboard
+  labels: {{- include "of.labels" . | nindent 4 }}
+    app.kubernetes.io/name: dashboard
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: dashboard } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: dashboard }
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: dashboard
+          image: {{ include "of.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["apps/dashboard/dist/main.js"]
+          ports: [{ containerPort: 8080, name: http }]
+          env:
+            - { name: DASHBOARD_PORT, value: "8080" }
+            - { name: FACTORY_API_URL, value: {{ printf "http://%s:3000" (include "of.svc" (dict "root" . "name" "server")) | quote }} }
+            - { name: DASHBOARD_MODELS, value: {{ join "," .Values.dashboard.models | quote }} }
+            - name: FACTORY_API_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ include "of.generatedSecret" . }}, key: FACTORY_API_TOKEN } }
+            - name: DASHBOARD_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "of.generatedSecret" . }}, key: DASHBOARD_PASSWORD } }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          resources: {{- toYaml .Values.dashboard.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-dashboard
+  labels: {{- include "of.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: dashboard }
+  ports: [{ port: 8080, targetPort: http, name: http }]
+{{- end }}
+{{- if .Values.dxfake.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-dxfake
+  labels: {{- include "of.labels" . | nindent 4 }}
+    app.kubernetes.io/name: dxfake
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: dxfake } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: dxfake }
+    spec:
+      containers:
+        - name: dxfake
+          image: {{ include "of.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["plugins/metrics-dxfake/dist/main.js"]
+          ports: [{ containerPort: 8787, name: http }]
+          env:
+            - { name: DXFAKE_PORT, value: "8787" }
+            - { name: DXFAKE_DATA_FILE, value: /tmp/dx.json }
+            - name: DXFAKE_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ include "of.generatedSecret" . }}, key: FACTORY_API_TOKEN } }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          resources: { requests: { cpu: 10m, memory: 48Mi }, limits: { memory: 192Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-dxfake
+  labels: {{- include "of.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: dxfake }
+  ports: [{ port: 8787, targetPort: http, name: http }]
+{{- end }}

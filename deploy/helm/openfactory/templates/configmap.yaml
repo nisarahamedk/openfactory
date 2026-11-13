@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-factory
+  labels: {{- include "of.labels" . | nindent 4 }}
+data:
+  factory.yaml: |
+    {{- toYaml .Values.factory | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-litellm
+  labels: {{- include "of.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    model_list:
+    {{- range .Values.litellm.models }}
+      - model_name: {{ .name }}
+        litellm_params: { model: {{ .model }}, api_key: os.environ/{{ .apiKeyEnv }} }
+        {{- with .cost }}
+        model_info: { input_cost_per_token: {{ .input }}, output_cost_per_token: {{ .output }}{{ with .cacheRead }}, cache_read_input_token_cost: {{ . }}{{ end }}{{ with .cacheWrite }}, cache_creation_input_token_cost: {{ . }}{{ end }} }
+        {{- end }}
+    {{- end }}
+    litellm_settings:
+      max_budget: {{ .Values.litellm.budgetUsd }}
+      budget_duration: {{ .Values.litellm.budgetDuration }}
+      drop_params: true
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+      database_url: os.environ/LITELLM_DATABASE_URL

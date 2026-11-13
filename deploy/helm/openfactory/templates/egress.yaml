@@ -1,0 +1,113 @@
+{{- if .Values.egress.enabled }}
+# Sandbox egress proxy: deny by default; the allowlist is egress.allow. The collector groups the
+# access log per task (pod IP -> openfactory.dev/task label), host and minute and posts it to POST /v1/egress.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-egress
+  labels: {{- include "of.labels" . | nindent 4 }}
+data:
+  allowlist.txt: |
+    {{- range .Values.egress.allow }}
+    {{ . }}
+    {{- end }}
+  squid.conf: |
+    http_port 3128
+    pid_filename /tmp/squid.pid
+    coredump_dir /tmp
+    cache deny all
+    cache_mem 8 MB
+    dns_v4_first on
+    acl SSL_ports port 443
+    acl Safe_ports port 80 443
+    acl CONNECT method CONNECT
+    acl allowed dstdomain "/etc/squid-egress/allowlist.txt"
+    http_access deny !Safe_ports
+    http_access deny CONNECT !SSL_ports
+    http_access allow allowed
+    http_access deny all
+    logformat egress %ts %>a %Ss/%>Hs %rm %ru
+    access_log stdio:/var/log/egress/access.log egress
+    cache_log stdio:/dev/stderr
+    logfile_rotate 0
+    forwarded_for delete
+    via off
+  collector.py: |
+    {{- .Files.Get "files/collector.py" | nindent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-egress
+  labels: {{- include "of.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-egress-read-pods
+  namespace: {{ .Values.workspaces.namespace }}
+  labels: {{- include "of.labels" . | nindent 4 }}
+rules:
+  - { apiGroups: [""], resources: [pods], verbs: [list] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-egress-read-pods
+  namespace: {{ .Values.workspaces.namespace }}
+  labels: {{- include "of.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ .Release.Name }}-egress-read-pods }
+subjects:
+  - { kind: ServiceAccount, name: {{ .Release.Name }}-egress, namespace: {{ .Release.Namespace }} }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-egress
+  labels: {{- include "of.labels" . | nindent 4 }}
+    app.kubernetes.io/name: egress
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: egress } }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: egress }
+      annotations:
+        checksum/config: {{ toYaml .Values.egress | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-egress
+      containers:
+        - name: squid
+          image: {{ .Values.egress.image }}
+          command: ["sh", "-c", "touch /var/log/egress/access.log && chmod 666 /var/log/egress/access.log && exec squid -N -f /etc/squid-egress/squid.conf"]
+          ports: [{ containerPort: 3128, name: proxy }]
+          readinessProbe: { tcpSocket: { port: 3128 }, periodSeconds: 5 }
+          resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
+          volumeMounts:
+            - { name: config, mountPath: /etc/squid-egress }
+            - { name: logs, mountPath: /var/log/egress }
+        - name: collector
+          image: {{ .Values.egress.collectorImage }}
+          command: ["python3", "-u", "/etc/squid-egress/collector.py"]
+          env:
+            - { name: FACTORY_URL, value: {{ printf "http://%s:3000" (include "of.svc" (dict "root" . "name" "server")) | quote }} }
+            - { name: WORKSPACE_NAMESPACE, value: {{ .Values.workspaces.namespace | quote }} }
+            - name: FACTORY_API_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ include "of.generatedSecret" . }}, key: FACTORY_API_TOKEN } }
+          resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 128Mi } }
+          volumeMounts:
+            - { name: config, mountPath: /etc/squid-egress }
+            - { name: logs, mountPath: /var/log/egress }
+      volumes:
+        - { name: config, configMap: { name: {{ .Release.Name }}-egress } }
+        - { name: logs, emptyDir: { sizeLimit: 256Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-egress
+  labels: {{- include "of.labels" . | nindent 4 }}
+spec:
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: egress }
+  ports: [{ name: proxy, port: 3128, targetPort: 3128 }]
+{{- end }}
