@@ -31,6 +31,9 @@ data:
     .clerk.accounts.dev
     api.clerk.com
     img.clerk.com
+    # Web fonts, so e2e screenshots render like the real app.
+    fonts.googleapis.com
+    fonts.gstatic.com
     .178.105.22.96.sslip.io
   squid.conf: |
     http_port 3128
@@ -174,7 +177,7 @@ spec:
   template:
     metadata:
       labels: { app: egress-proxy }
-      annotations: { egress/config-version: "5" }
+      annotations: { egress/config-version: "6" }
     spec:
       serviceAccountName: egress-collector
       containers:
