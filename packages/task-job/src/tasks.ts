@@ -145,6 +145,7 @@ export function jobTasks(deps: JobDeps) {
           await ws?.destroy();
           const env = record.environment ? await deps.environment.get(record.environment.name) : null;
           await env?.destroy();
+          await deps.modelKeys?.revoke(record.id);
         } catch (e) {
           deps.log("teardown failed", { taskId: record.id, error: String(e) });
         }

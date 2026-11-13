@@ -28,6 +28,10 @@ const Env = z.object({
   FOREMAN_COST_IN: z.coerce.number().default(1),
   FOREMAN_COST_OUT: z.coerce.number().default(5),
   WORKER_MODEL: z.string().default("claude-sonnet"),
+  /** With these, each task gets its own LiteLLM key capped at MAX_TASK_USD (the shared key stays out of sandboxes). */
+  LITELLM_ADMIN_URL: z.string().optional(),
+  LITELLM_MASTER_KEY: z.string().optional(),
+  TASK_KEY_MODELS: z.string().default("claude-sonnet,claude-haiku"),
 
   AGENT_PLUGIN: z.string().default("acp"),
   WORKSPACE_PLUGIN: z.string().default("k8s"),

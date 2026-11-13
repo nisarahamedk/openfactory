@@ -7,6 +7,11 @@
  * factory's secrets. With a PAT the factory acts as that person, so every post
  * carries FACTORY_MARKER and the rules never react to it.
  */
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { verify } from "@octokit/webhooks-methods";
 import {
   FACTORY_MARKER,
@@ -248,4 +253,51 @@ export async function parseWebhook(
   if (!s) return null;
   const parsed = Signal.safeParse(s);
   return parsed.success ? parsed.data : null;
+}
+
+// ───────────────────────────── pushing from the server ─────────────────────────────
+
+const run = promisify(execFile);
+
+/**
+ * Pushes a sandbox's branch from the server. The sandbox only hands over a git bundle, so the token that can
+ * push stays in the control plane. The token goes to git through an extra header, never in a URL or argv log.
+ */
+export class GitHubBundlePusher {
+  constructor(
+    private readonly opts: { token: () => string | Promise<string>; remoteUrl?: (repo: RepoRef) => string },
+  ) {}
+
+  async push(repo: RepoRef, branch: string, bundle: Uint8Array): Promise<void> {
+    if (!/^[A-Za-z0-9._/-]+$/.test(branch) || branch.includes("..")) throw new Error(`refusing to push branch "${branch}"`);
+    const dir = await mkdtemp(join(tmpdir(), "of-push-"));
+    try {
+      const file = join(dir, "b.bundle");
+      await writeFile(file, bundle);
+      const git = (...args: string[]) => run("git", args, { cwd: dir, maxBuffer: 64 * 1024 * 1024 });
+      await git("init", "-q", "--bare", "repo.git");
+      await run("git", ["--git-dir", "repo.git", "fetch", "-q", file, `+refs/heads/${branch}:refs/heads/${branch}`], { cwd: dir });
+      const token = await this.opts.token();
+      const auth = Buffer.from(`x-access-token:${token}`).toString("base64");
+      await run(
+        "git",
+        [
+          "--git-dir",
+          "repo.git",
+          "-c",
+          `http.extraheader=AUTHORIZATION: basic ${auth}`,
+          "push",
+          "-q",
+          "--force",
+          this.opts.remoteUrl ? this.opts.remoteUrl(repo) : `https://github.com/${repo.owner}/${repo.name}.git`,
+          `refs/heads/${branch}:refs/heads/${branch}`,
+        ],
+        { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } },
+      ).catch((e: { stderr?: string }) => {
+        throw new Error(`git push failed: ${String(e.stderr ?? e).replaceAll(token, "***").slice(0, 500)}`);
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
 }

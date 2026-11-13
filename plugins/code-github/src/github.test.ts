@@ -56,3 +56,25 @@ describe("GitHubChat", () => {
     expect(JSON.parse(sent).body).toContain("<!-- openfactory -->");
   });
 });
+
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { GitHubBundlePusher } from "./index.js";
+
+describe("GitHubBundlePusher", () => {
+  it("pushes a branch from a bundle", async () => {
+    const d = mkdtempSync(join(tmpdir(), "bp-"));
+    const g = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, env: { ...process.env, GIT_AUTHOR_NAME: "a", GIT_AUTHOR_EMAIL: "a@x", GIT_COMMITTER_NAME: "a", GIT_COMMITTER_EMAIL: "a@x" } }).toString().trim();
+    g(d, "init", "-q", "-b", "factory/task_x", "work");
+    g(join(d, "work"), "commit", "-q", "--allow-empty", "-m", "hi");
+    const sha = g(join(d, "work"), "rev-parse", "HEAD");
+    g(join(d, "work"), "bundle", "create", join(d, "b.bundle"), "refs/heads/factory/task_x");
+    g(d, "init", "-q", "--bare", "remote.git");
+    const pusher = new GitHubBundlePusher({ token: () => "t", remoteUrl: () => join(d, "remote.git") });
+    await pusher.push({ host: "github", owner: "o", name: "r" }, "factory/task_x", readFileSync(join(d, "b.bundle")));
+    expect(g(join(d, "remote.git"), "rev-parse", "refs/heads/factory/task_x")).toBe(sha);
+    await expect(pusher.push({ host: "github", owner: "o", name: "r" }, "../main", new Uint8Array())).rejects.toThrow();
+  });
+});

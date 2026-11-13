@@ -33,7 +33,6 @@ export async function prepare(deps: JobDeps, taskId: TaskId): Promise<void> {
     await deps.ledger.append(taskId, "workspace_attached", { plugin: deps.workspace.name, id: ws.id });
   }
   for (const f of await env.credentialsForWorkspace()) await ws.writeFile(f.path, f.content);
-  await refreshPushToken(deps, record, ws);
 }
 
 async function homeOf(ws: WorkspaceHandle): Promise<string> {
@@ -41,11 +40,23 @@ async function homeOf(ws: WorkspaceHandle): Promise<string> {
   return r.stdout.trim() || "/root";
 }
 
-export async function refreshPushToken(deps: JobDeps, record: TaskRecord, ws: WorkspaceHandle): Promise<void> {
-  const { token } = await deps.codeHost.mintPushToken(record.source.repo);
-  const home = await homeOf(ws);
-  await ws.writeFile(`${home}/.git-credentials`, `https://x-access-token:${token}@github.com\n`);
-  await ws.exec(["git", "config", "--global", "credential.helper", `store --file=${home}/.git-credentials`]);
+/**
+ * Push the task branch from the server: the sandbox makes a git bundle of its branch, the server pushes it with
+ * its own credentials. Returns false when there is nothing to push yet.
+ */
+export async function pushBranch(deps: JobDeps, record: TaskRecord, ws: WorkspaceHandle): Promise<boolean> {
+  const branch = branchFor(deps, record);
+  const out = await ws.exec([
+    "sh",
+    "-c",
+    `set -e; f=$(mktemp); git -C "$1" bundle create "$f" "refs/heads/$2" >/dev/null 2>&1; base64 -w0 "$f"; rm -f "$f"`,
+    "sh",
+    ws.repoPath,
+    branch,
+  ]);
+  if (out.exitCode !== 0 || !out.stdout.trim()) return false;
+  await deps.pusher.push(record.source.repo, branch, Buffer.from(out.stdout.trim(), "base64"));
+  return true;
 }
 
 export async function attach(deps: JobDeps, record: TaskRecord): Promise<{ ws: WorkspaceHandle; env: EnvironmentHandle }> {
@@ -61,7 +72,6 @@ export async function wakeAll(deps: JobDeps, taskId: TaskId): Promise<void> {
   await ws.wake();
   await env.wake();
   for (const f of await env.credentialsForWorkspace()) await ws.writeFile(f.path, f.content);
-  await refreshPushToken(deps, record, ws);
 }
 
 export async function sleepAll(deps: JobDeps, taskId: TaskId): Promise<void> {
@@ -91,7 +101,7 @@ export async function runTurn(
     cwd: ws.repoPath,
     systemPrompt: systemPrompt(record, branchFor(deps, record), skill, deps.config.baseBranch),
     resumeSessionId: record.harnessSessionId,
-    env: { ...(await env.envVars()), ...deps.config.agentEnv },
+    env: { ...(await env.envVars()), ...deps.config.agentEnv, ...(deps.modelKeys ? await deps.modelKeys.forTask(taskId) : {}) },
   });
   if (session.sessionId !== record.harnessSessionId)
     await deps.ledger.append(taskId, "session_started", { sessionId: session.sessionId });
@@ -220,6 +230,8 @@ export type Gate = { kind: "ready" } | { kind: "nudge"; prompt: string } | { kin
 
 /** After a turn: PR + evidence → review; otherwise nudge the agent, then give up. */
 export async function reviewGate(deps: JobDeps, taskId: TaskId, summary: string, nudges: number): Promise<Gate> {
+  const before = await mustTask(deps, taskId);
+  await pushBranch(deps, before, (await attach(deps, before)).ws);
   await ensurePr(deps, taskId, summary);
   await collectEvidence(deps, taskId);
   const record = await ensurePr(deps, taskId, summary);
@@ -228,7 +240,7 @@ export async function reviewGate(deps: JobDeps, taskId: TaskId, summary: string,
   if (nudges < deps.config.maxNudges)
     return {
       kind: "nudge",
-      prompt: `The factory can't send this to review yet: ${ready.reason}\nPush your branch \`${branchFor(deps, record)}\`, run the e2e tests against your environment, and write evidence for the pushed HEAD commit to $HOME/evidence/manifest.json as described in your instructions. Then stop.`,
+      prompt: `The factory can't send this to review yet: ${ready.reason}\nCommit your work on branch \`${branchFor(deps, record)}\`, run the e2e tests against your environment, and write evidence for your HEAD commit to $HOME/evidence/manifest.json as described in your instructions. Then stop.`,
     };
   return { kind: "give_up", reason: ready.reason };
 }

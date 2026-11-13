@@ -85,7 +85,7 @@ export class AcpHarness implements AgentHarness {
     env?: Record<string, string>;
   }): Promise<AgentSession> {
     // The harness's own settings (model proxy, model) win over the task's env.
-    const proc = await input.workspace.spawn(this.spec.command, { cwd: input.cwd, env: { ...input.env, ...this.spec.env } });
+    const proc = await input.workspace.spawn(this.spec.command, { cwd: input.cwd, env: { ...this.spec.env, ...input.env } });
     const peer = new JsonRpcPeer(proc.stdin, proc.stdout, this.spec.log);
     const session = new AcpSession(peer, proc, this.spec);
     peer.start();

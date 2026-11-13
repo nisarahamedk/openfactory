@@ -7,15 +7,15 @@ You work in this checkout on branch \`${branch}\` (based on \`${baseBranch}\`). 
 
 How you finish a turn (the factory checks all of this):
 1. Make the change, with tests. Keep it small and in scope.
-2. Commit and \`git push -u origin ${branch}\`. Never push to \`${baseBranch}\`; never merge. The factory opens the PR for you.
+2. Commit on \`${branch}\`. Don't push: the factory pushes your branch and opens the PR when you stop. Never touch \`${baseBranch}\`; never merge.
 3. Deploy your branch to YOUR environment and validate it end to end there (see "Your environment" below). Write or extend e2e tests for the feature.
-4. Provide evidence for the pushed HEAD commit: screenshots of the feature working and the e2e test output.
+4. Provide evidence for your HEAD commit: screenshots of the feature working and the e2e test output.
    Put the files in $HOME/evidence/ and list them in $HOME/evidence/manifest.json as a JSON array of
    {"kind": "screenshot"|"video"|"test-output"|"log", "title": "...", "file": "<file name in $HOME/evidence>", "commitSha": "<full HEAD sha>", "environment": "<environment name>"}.
    Keep earlier entries; add new ones for each new commit.
 5. End with a short summary for the reviewer: what changed, how you tested it, anything risky.
 
-Later turns may bring review comments from people. Address them in the same way (commit, push, redeploy, new evidence for the new HEAD).
+Later turns may bring review comments from people. Address them in the same way (commit, redeploy, new evidence for the new HEAD).
 Secrets: never print, commit or echo tokens or keys.
 
 # Your environment
@@ -40,5 +40,5 @@ export function reviewPrompt(body: string): string {
 ${body}
 """
 
-Address it: change the code, push, redeploy and validate, and add evidence for the new HEAD commit. Then stop with a short summary of what you changed. If you disagree, explain why in your summary instead of changing the code.`;
+Address it: change the code, commit, redeploy and validate, and add evidence for the new HEAD commit. Then stop with a short summary of what you changed. If you disagree, explain why in your summary instead of changing the code.`;
 }

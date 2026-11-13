@@ -38,6 +38,7 @@ function world() {
     repoPath: "/repo",
     async exec(cmd) {
       const [c, ...a] = cmd;
+      if (c === "sh" && a[1]?.includes("bundle")) return { exitCode: 0, stdout: Buffer.from(`bundle:${a[4]}`).toString("base64"), stderr: "" };
       if (c === "sh") return { exitCode: 0, stdout: HOME, stderr: "" };
       if (c === "git") return { exitCode: 0, stdout: "", stderr: "" };
       if (c === "cat") {
@@ -123,7 +124,9 @@ function world() {
   };
   const sunk: TaskRecord[] = [];
   const sink: MetricsSink = { name: "fake-dx", writeTasks: async (r) => void sunk.push(...r) };
-  return { workspace, environment, agent, codeHost, chat, sink, posts, sessions, prompts, life, sunk, files };
+  const pushed: string[] = [];
+  const pusher = { push: async (_r: unknown, branch: string, b: Uint8Array) => void pushed.push(`${branch}=${Buffer.from(b).toString()}`) };
+  return { workspace, environment, agent, codeHost, chat, sink, posts, sessions, prompts, life, sunk, files, pusher, pushed };
 }
 
 describe("task job", () => {
@@ -145,6 +148,8 @@ describe("task job", () => {
         agent: w.agent,
         workspace: w.workspace,
         environment: w.environment,
+        pusher: w.pusher,
+        modelKeys: { forTask: async (t: string) => ({ ANTHROPIC_API_KEY: `key-${t}` }), revoke: async () => {} },
         evidence: { put: async (t, name) => ({ url: `https://factory/evidence/${t}/${name}` }) },
         scorers: factScorers,
         sinks: [w.sink],
@@ -177,6 +182,7 @@ describe("task job", () => {
     expect(w.posts.some((p) => p.to === 7 && p.md.includes("On it"))).toBe(true);
     expect(w.posts.some((p) => p.to === 41 && p.md.includes("Ready for review") && p.md.includes("![Feature at 1]"))).toBe(true);
     expect(w.life).toEqual(["env.sleep", "ws.sleep"]);
+    expect(w.pushed[0]).toBe(`factory/${taskId}=bundle:factory/${taskId}`);
 
     // A question in the issue goes to the foreman, not the worker.
     await jobs.handle({ ...base, id: "d2", type: "issue_comment", issueNumber: 7, body: "status?" });
