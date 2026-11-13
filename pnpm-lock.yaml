@@ -267,6 +267,13 @@ importers:
       '@openfactory/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+    devDependencies:
+      '@openfactory/agent-acp':
+        specifier: workspace:*
+        version: link:../agent-acp
+      '@openfactory/env-devspace':
+        specifier: workspace:*
+        version: link:../env-devspace
 
   plugins/workspace-local:
     dependencies:
