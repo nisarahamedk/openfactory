@@ -12,7 +12,7 @@ metadata:
   name: openfactory
 rules:
   - apiGroups: [""]
-    resources: [namespaces, pods, pods/exec, pods/log, pods/attach, services, configmaps, secrets, serviceaccounts, serviceaccounts/token, persistentvolumeclaims, resourcequotas, limitranges]
+    resources: [namespaces, pods, pods/exec, pods/log, pods/attach, pods/portforward, events, services, configmaps, secrets, serviceaccounts, serviceaccounts/token, persistentvolumeclaims, resourcequotas, limitranges]
     verbs: ["*"]
   - apiGroups: [apps]
     resources: [deployments, statefulsets, replicasets]
