@@ -36,3 +36,9 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: { name: LITELLM_MASTER_KEY, valueFrom: { secretKeyRef: { name: litellm, key: LITELLM_MASTER_KEY } } }
+      # Sandboxes reach the internet only through the egress proxy (deploy/platform/egress.yaml).
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: WORKSPACE_POD_ENV
+          value: '{"HTTPS_PROXY":"http://egress-proxy.factory-egress.svc:3128","HTTP_PROXY":"http://egress-proxy.factory-egress.svc:3128","https_proxy":"http://egress-proxy.factory-egress.svc:3128","http_proxy":"http://egress-proxy.factory-egress.svc:3128","NO_PROXY":"localhost,127.0.0.1,.svc,.cluster.local,10.43.0.0/16,10.42.0.0/16","no_proxy":"localhost,127.0.0.1,.svc,.cluster.local,10.43.0.0/16,10.42.0.0/16"}'

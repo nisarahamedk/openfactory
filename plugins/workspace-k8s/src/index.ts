@@ -38,6 +38,8 @@ export interface K8sWorkspaceOptions {
   runtimeClassName: string | null;
   /** How long to wait for a pod to start. */
   startTimeoutMs: number;
+  /** Extra env for every container in the pod (clone and agent), e.g. the egress proxy settings. */
+  podEnv?: Record<string, string>;
 }
 
 const WORK = "/work";
@@ -331,6 +333,10 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
     return ["env", "-C", cwd ?? REPO, ...vars, ...limit, ...cmd];
   }
 
+  private podEnv(): k8s.V1EnvVar[] {
+    return Object.entries(this.options.podEnv ?? {}).map(([name, value]) => ({ name, value }));
+  }
+
   private podSpec(): k8s.V1Pod {
     const { resources } = this.options;
     return {
@@ -356,6 +362,7 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
               { name: "REPO_URL", value: this.clone?.repoUrl ?? "" },
               { name: "TASK_BRANCH", value: this.clone?.branch ?? "" },
               { name: "START_REF", value: this.clone?.startRef ?? "" },
+              ...this.podEnv(),
               ...(this.clone === null
                 ? []
                 : [{ name: "GITHUB_TOKEN", valueFrom: { secretKeyRef: { name: this.clone.tokenSecret, key: "GITHUB_TOKEN", optional: true } } }]),
@@ -378,6 +385,7 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
               { name: "HOME", value: HOME },
               { name: "CLAUDE_CONFIG_DIR", value: `${HOME}/.claude` },
               { name: "OPENFACTORY_TASK", value: this.taskId },
+              ...this.podEnv(),
             ],
             readinessProbe: { exec: { command: ["test", "-f", `${HOME}/.ready`] }, periodSeconds: 1 },
             resources: {
@@ -464,7 +472,26 @@ export function fromEnv(env: Env): K8sWorkspace {
     },
     runtimeClassName: env.WORKSPACE_RUNTIME_CLASS ?? null,
     startTimeoutMs: Number(env.WORKSPACE_START_TIMEOUT_MS ?? "300000"),
+    podEnv: parsePodEnv(env.WORKSPACE_POD_ENV),
   });
 }
 
 export const createK8sWorkspace = (options: K8sWorkspaceOptions): K8sWorkspace => new K8sWorkspace(options);
+
+/**
+ * WORKSPACE_POD_ENV is a JSON object of extra env vars for the workspace pod's containers, e.g.
+ * {"HTTPS_PROXY":"http://egress-proxy.factory-egress.svc:3128","NO_PROXY":".svc,.cluster.local"}.
+ */
+function parsePodEnv(raw: string | undefined): Record<string, string> {
+  if (raw === undefined || raw.trim() === "") return {};
+  const parsed: unknown = JSON.parse(raw);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("WORKSPACE_POD_ENV must be a JSON object of string values");
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(parsed)) {
+    if (typeof v !== "string") throw new Error(`WORKSPACE_POD_ENV.${k} must be a string`);
+    out[k] = v;
+  }
+  return out;
+}
