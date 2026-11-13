@@ -211,6 +211,8 @@ export interface AgentHarness {
     cwd: string;
     systemPrompt: string;
     resumeSessionId: string | null;
+    /** Extra environment for the agent process (environment handle vars, model proxy URL...). */
+    env?: Record<string, string>;
   }): Promise<AgentSession>;
 }
 
