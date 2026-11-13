@@ -63,3 +63,41 @@ describe("Ledger", () => {
     expect(await ledger.listTasks({ status: "working" })).toHaveLength(1);
   });
 });
+
+describe("people, labels and world checks", () => {
+  it("keeps who asked and the labels, and turns a world check into a score", async () => {
+    const { PGlite } = await import("@electric-sql/pglite");
+    const { drizzle } = await import("drizzle-orm/pglite");
+    const l = new Ledger(drizzle(new PGlite()));
+    await l.migrate();
+    const id = "task_w1" as TaskId;
+    await l.createTask({ id, factoryVersion: "fv", source: { kind: "github_issue", repo: { host: "github", owner: "o", name: "r" }, issueNumber: 1, url: null }, title: "t", ask: "a", harness: { name: "h", model: "m" }, requestedBy: "dana", labels: ["factory", "ui"] });
+    const w = { world: "payments-30d", headSha: "abc", simDays: 30, status: "failed" as const, startedAt: "2026-11-13T00:00:00Z", finishedAt: "2026-11-13T00:03:00Z", invariants: [{ name: "money conserved", ok: false, detail: "2 refunds paid twice" }, { name: "no 5xx spike", ok: true, detail: "" }], metrics: [], reportUrl: null };
+    const { record } = await l.append(id, "world_check", w);
+    expect(record.requestedBy).toBe("dana");
+    expect(record.labels).toEqual(["factory", "ui"]);
+    expect(record.worldChecks).toHaveLength(1);
+    expect(record.scores.find((s) => s.scorer === "checks.world")).toMatchObject({ value: 0, label: "failed", reason: "payments-30d, 30 simulated days: money conserved" });
+  });
+});
+
+describe("app store", () => {
+  it("saves views and keeps rollout history", async () => {
+    const { PGlite } = await import("@electric-sql/pglite");
+    const { drizzle } = await import("drizzle-orm/pglite");
+    const { AppStore } = await import("./app-store.js");
+    const s = new AppStore(drizzle(new PGlite()));
+    await s.migrate();
+    const v = await s.saveView({ name: "a", path: "/insights", owner: "dana", share: "me", team: "core" });
+    expect(v.team).toBeNull();
+    const renamed = await s.saveView({ id: v.id, name: "b", path: "/insights?by=repo", owner: "dana", share: "team", team: "core" });
+    expect(renamed.id).toBe(v.id);
+    expect((await s.listViews({ login: "li", teams: ["core"] })).map((x) => x.name)).toEqual(["b"]);
+    expect(await s.listViews({ login: "li", teams: [] })).toEqual([]);
+    await s.setRollout({ factory: "default", live: "fv_1", candidate: "fv_2", share: 0.1, updatedBy: "omar", note: null });
+    await s.setRollout({ factory: "default", live: "fv_2", candidate: null, share: 0, updatedBy: "omar", note: "promoted" });
+    const r = await s.rollout("default");
+    expect(r!.state.live).toBe("fv_2");
+    expect(r!.history.map((h) => h.candidate)).toEqual(["fv_2"]);
+  });
+});

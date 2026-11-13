@@ -8,7 +8,7 @@ import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
 import { GitHubClient, parseWebhook } from "@openfactory/github";
-import type { AgentHarness, CodeForge, MetricsSink, OutcomeSource, Signal, TaskId } from "@openfactory/contracts";
+import type { AgentHarness, CodeForge, Directory, MetricsSink, OutcomeSource, Signal, Team, TaskId } from "@openfactory/contracts";
 import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
@@ -16,13 +16,14 @@ import { promptTemplates, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps 
 import { fileEvidenceStore, createApp } from "./app.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
+import { cachedDirectory, configDirectory, factoryViews, loadOrgConfig } from "./org.js";
 import { loadModelRouting, loadOutcomeConfig, loadSelections, ProviderRegistry } from "./registry.js";
 
 const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), msg, ...fields }));
 
 async function main() {
   const cfg = loadConfig(process.env);
-  const { ledger, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
+  const { ledger, app: store, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
 
   const gh = new GitHubClient({ token: () => cfg.GITHUB_TOKEN });
   const tokenLogin = await gh.whoami().catch(() => null);
@@ -186,8 +187,46 @@ async function main() {
     prompts: { ...promptTemplates(cfg.BASE_BRANCH), foreman: FOREMAN_INSTRUCTIONS },
   });
 
+  // Teams: factory.yaml `teams:` (a list, or a directory provider such as GitHub org teams). Without either,
+  // one team holds the factory's repos and everyone who has asked for a task.
+  const org = loadOrgConfig(cfg.FACTORY_FILE);
+  let directory: Directory;
+  if (org.teams) directory = configDirectory(org.teams);
+  else if (org.directory) directory = cachedDirectory(await registry.build("directory", org.directory));
+  else
+    directory = cachedDirectory(
+      {
+        name: "inferred",
+        teams: async (): Promise<Team[]> => {
+          const tasks = await ledger.listTasks({ limit: 1000 });
+          const people = [...new Set(tasks.map((t) => t.requestedBy).filter((x): x is string => typeof x === "string" && !botLogins.includes(x)))].sort();
+          return [{ slug: "everyone", name: "Everyone", source: "inferred", members: people.map((login) => ({ login, name: null, role: "member" as const })), repos: cfg.repos.map((r) => `${r.owner}/${r.name}`), factory: "default" }];
+        },
+      },
+      60_000,
+    );
+  log("teams from", { directory: directory.name });
+
+  /** A person writes to a task from the app: post it where the task lives, record it, and hand it to the job as a comment. */
+  const message = async (id: TaskId, author: string, text: string) => {
+    const t = await ledger.getTask(id);
+    if (!t) return null;
+    const target = t.pr?.number ?? t.source.issueNumber;
+    let url: string | null = null;
+    if (target !== null) url = (await chat.post({ repo: t.source.repo, issueOrPr: target }, `**@${author}** wrote in the factory app:\n\n${text}`)).url;
+    const at = new Date().toISOString();
+    const mid = `app:${id}:${Date.now().toString(36)}`;
+    await ledger.append(id, "message_received", { author, text, url }, { dedupeKey: `msg:${mid}` });
+    if (target !== null) await onSignal({ type: "issue_comment", id: mid, repo: t.source.repo, at, actor: { login: author, isBot: false }, issueNumber: target, body: text });
+    return { task: (await ledger.getTask(id))!, url };
+  };
+
   const app = createApp({
     ledger,
+    store,
+    teams: () => directory.teams(),
+    factories: async () => factoryViews(org.factories, await directory.teams()),
+    message,
     factory: factoryInfo,
     cancel: (id, by, reason) => onCancel(id, by, reason),
     onSignal,

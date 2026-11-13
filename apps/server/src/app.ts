@@ -13,12 +13,12 @@
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Signal, TaskId, TaskStatus, type TaskRecord } from "@openfactory/contracts";
-import type { Ledger } from "@openfactory/ledger";
+import { Signal, TaskId, TaskStatus, type RolloutState, type TaskRecord, type Team } from "@openfactory/contracts";
+import type { AppStore, Ledger } from "@openfactory/ledger";
 import type { EvidenceStore } from "@openfactory/task-job";
 import { Hono } from "hono";
 import type { z } from "zod";
-import { buildOpenApi, CancelTask, EgressReport, FactoryApi, type FactoryInfo } from "@openfactory/client";
+import { buildOpenApi, CancelTask, EgressReport, FactoryApi, PostMessage, SaveView, SetRollout, type FactoryInfo, type FactoryView } from "@openfactory/client";
 import { createMcpHttpHandler } from "@openfactory/mcp";
 
 const SAFE = /^[A-Za-z0-9._-]{1,200}$/;
@@ -59,6 +59,14 @@ export type AppDeps = {
   /** Public base URL, used in the OpenAPI document's `servers`. */
   publicUrl: string | null;
   log: (m: string, f?: object) => void;
+  /** Saved views and rollouts. */
+  store: AppStore;
+  /** Teams from the org's directory. */
+  teams: () => Promise<Team[]>;
+  /** The org default and team factories. */
+  factories: () => Promise<FactoryView[]>;
+  /** Write to a task as a person; null when the task is unknown. */
+  message: (taskId: TaskId, author: string, text: string) => Promise<{ task: TaskRecord; url: string | null } | null>;
 };
 
 export function createApp(d: AppDeps): Hono {
@@ -121,6 +129,60 @@ export function createApp(d: AppDeps): Hono {
       recorded++;
     }
     return c.json({ recorded }, 202);
+  });
+  v1.post("/tasks/:id/messages", async (c) => {
+    const id = TaskId.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
+    const body = PostMessage.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ code: "INVALID_REQUEST", message: "bad message", issues: body.error.issues }, 400);
+    const r = await d.message(id.data, body.data.author, body.data.text);
+    return r ? c.json(r) : c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
+  });
+  v1.get("/teams", async (c) => c.json({ teams: await d.teams() }));
+  v1.get("/factories", async (c) => {
+    const [factories, rollouts] = await Promise.all([d.factories(), d.store.listRollouts()]);
+    return c.json({ factories, rollouts });
+  });
+  const knownFactory = async (slug: string) => (await d.factories()).some((f) => f.slug === slug);
+  v1.get("/rollout/:factory", async (c) => {
+    const slug = c.req.param("factory");
+    if (!(await knownFactory(slug))) return c.json({ code: "FACTORY_NOT_FOUND", message: "no such factory" }, 404);
+    const r = await d.store.rollout(slug);
+    return c.json({ rollout: r?.state ?? null, history: r?.history ?? [] });
+  });
+  v1.post("/rollout/:factory", async (c) => {
+    const slug = c.req.param("factory");
+    if (!(await knownFactory(slug))) return c.json({ code: "FACTORY_NOT_FOUND", message: "no such factory" }, 404);
+    const body = SetRollout.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ code: "INVALID_REQUEST", message: "bad rollout", issues: body.error.issues }, 400);
+    const b = body.data;
+    if (b.candidate === null && b.share > 0) return c.json({ code: "INVALID_REQUEST", message: "a share needs a candidate" }, 400);
+    const state: Omit<RolloutState, "updatedAt"> = { factory: slug, live: b.live, candidate: b.candidate, share: b.candidate === null ? 0 : b.share, updatedBy: b.by, note: b.note };
+    const rollout = await d.store.setRollout(state);
+    d.log("rollout changed", { ...rollout });
+    return c.json({ rollout });
+  });
+  v1.get("/views", async (c) => {
+    const viewer = c.req.query("viewer");
+    if (!viewer) return c.json({ code: "INVALID_REQUEST", message: "viewer is required" }, 400);
+    const teams = (await d.teams()).filter((t) => t.members.some((m) => m.login.toLowerCase() === viewer.toLowerCase())).map((t) => t.slug);
+    return c.json({ views: await d.store.listViews({ login: viewer, teams }) });
+  });
+  v1.get("/views/:id", async (c) => {
+    const v = await d.store.getView(c.req.param("id"));
+    return v ? c.json({ view: v }) : c.json({ code: "VIEW_NOT_FOUND", message: "no such view" }, 404);
+  });
+  v1.post("/views", async (c) => {
+    const body = SaveView.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ code: "INVALID_REQUEST", message: "bad view", issues: body.error.issues }, 400);
+    if (body.data.share === "team" && !body.data.team) return c.json({ code: "INVALID_REQUEST", message: "a team view needs a team" }, 400);
+    const { id, ...rest } = body.data;
+    return c.json({ view: await d.store.saveView(id ? { id, ...rest } : rest) });
+  });
+  v1.post("/views/:id/delete", async (c) => {
+    const by = (await c.req.json().catch(() => ({}))) as { by?: unknown };
+    if (typeof by.by !== "string" || by.by === "") return c.json({ code: "INVALID_REQUEST", message: "by is required" }, 400);
+    return c.json({ deleted: await d.store.deleteView(c.req.param("id"), by.by) });
   });
   if (d.bench) v1.route("/", d.bench);
   app.route("/v1", v1);

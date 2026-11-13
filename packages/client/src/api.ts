@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { BenchmarkTask, LedgerEvent, TaskRecord, type LedgerReader, type TaskId, type TaskStatus } from "@openfactory/contracts";
+import { BenchmarkTask, LedgerEvent, RolloutState, SavedView, TaskRecord, Team, type LedgerReader, type TaskId, type TaskStatus, type ViewShare } from "@openfactory/contracts";
 import { BenchRun } from "@openfactory/bench";
-import { FactoryInfo } from "./routes.js";
+import { FactoryInfo, FactoryView } from "./routes.js";
 
 export interface FactoryApiConfig {
   baseUrl: string;
@@ -111,6 +111,47 @@ export class FactoryApi implements LedgerReader {
     if (res.status === 404) return null;
     if (!res.ok) throw new FactoryApiError(res.status, `GET transcript ${key} failed with ${res.status}`);
     return res.text();
+  }
+
+  postMessage(id: TaskId, input: { author: string; text: string }): Promise<{ task: TaskRecord; url: string | null }> {
+    return this.call("POST", `/v1/tasks/${id}/messages`, z.object({ task: TaskRecord, url: z.string().nullable() }), input);
+  }
+
+  teams(): Promise<Team[]> {
+    return this.call("GET", "/v1/teams", listOf(Team, "teams"));
+  }
+
+  factories(): Promise<{ factories: FactoryView[]; rollouts: RolloutState[] }> {
+    return this.call("GET", "/v1/factories", z.object({ factories: z.array(FactoryView), rollouts: z.array(RolloutState) }));
+  }
+
+  rollout(factory: string): Promise<{ rollout: RolloutState | null; history: RolloutState[] }> {
+    return this.call("GET", `/v1/rollout/${encodeURIComponent(factory)}`, z.object({ rollout: RolloutState.nullable(), history: z.array(RolloutState) }));
+  }
+
+  setRollout(factory: string, input: { live: string | null; candidate: string | null; share: number; by: string; note?: string | null }): Promise<RolloutState> {
+    return this.call("POST", `/v1/rollout/${encodeURIComponent(factory)}`, oneOf(RolloutState, "rollout"), { note: null, ...input });
+  }
+
+  views(viewer: string): Promise<SavedView[]> {
+    return this.call("GET", `/v1/views?viewer=${encodeURIComponent(viewer)}`, listOf(SavedView, "views"));
+  }
+
+  async view(id: string): Promise<SavedView | null> {
+    try {
+      return await this.call("GET", `/v1/views/${encodeURIComponent(id)}`, oneOf(SavedView, "view"));
+    } catch (err) {
+      if (err instanceof FactoryApiError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  saveView(input: { id?: string; name: string; path: string; owner: string; share: ViewShare; team: string | null }): Promise<SavedView> {
+    return this.call("POST", "/v1/views", oneOf(SavedView, "view"), input);
+  }
+
+  async deleteView(id: string, by: string): Promise<boolean> {
+    return (await this.call("POST", `/v1/views/${encodeURIComponent(id)}/delete`, z.object({ deleted: z.boolean() }), { by })).deleted;
   }
 
   startBenchRun(input: {

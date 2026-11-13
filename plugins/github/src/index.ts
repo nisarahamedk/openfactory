@@ -8,6 +8,7 @@
  * carries FACTORY_MARKER and the rules never react to it.
  */
 import { verify } from "@octokit/webhooks-methods";
+import { GitHubDirectory } from "./directory.js";
 import { GitHubOutcomeSource } from "./outcomes.js";
 import {
   defineProvider,
@@ -309,7 +310,17 @@ export const provider = defineProvider({
         log: ctx.log,
       }),
     outcomes: (ctx) => new GitHubOutcomeSource(clientFrom(ctx).gh, { followUpDays: Number(ctx.options.followUpDays ?? 14) }),
+    directory: (ctx) => {
+      const org = ctx.options.org;
+      if (typeof org !== "string" || org === "") throw new Error("github directory needs teams: { github: { org: <org> } }");
+      return new GitHubDirectory(clientFrom(ctx).gh, {
+        org,
+        ...(Array.isArray(ctx.options.teams) ? { teams: ctx.options.teams.map(String) } : {}),
+        ...(ctx.options.factories && typeof ctx.options.factories === "object" ? { factories: ctx.options.factories as Record<string, string> } : {}),
+      });
+    },
   },
 });
 
 export { GitHubOutcomeSource, isRevertOf, mentions, type GitHubOutcomeOptions } from "./outcomes.js";
+export { GitHubDirectory, type GitHubDirectoryOptions } from "./directory.js";

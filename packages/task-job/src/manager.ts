@@ -145,6 +145,8 @@ export class TaskJobs {
           },
           title: signal.title,
           ask: signal.body,
+          requestedBy: signal.actor.login,
+          labels: signal.labels ?? [signal.label],
           harness: { name: this.opts.harnessInfo.name, model: routed.model },
           dedupeKey: `signal:${signal.id}`,
           at: signal.at,

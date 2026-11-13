@@ -85,6 +85,21 @@ export const Outcome = z.object({
 });
 export type Outcome = z.infer<typeof Outcome>;
 
+/** One OpenWorld run of a PR head: the change deployed into a simulated world for `simDays` days. */
+export const WorldCheckResult = z.object({
+  world: z.string(),
+  headSha: z.string(),
+  simDays: z.number(),
+  status: z.enum(["passed", "failed", "error"]),
+  startedAt: z.string(),
+  finishedAt: z.string(),
+  /** Rules the world checks hold the whole time (money conserved, no 5xx spike...). */
+  invariants: z.array(z.object({ name: z.string(), ok: z.boolean(), detail: z.string() })),
+  metrics: z.array(z.object({ name: z.string(), value: z.number(), unit: z.string() })),
+  reportUrl: z.string().nullable(),
+});
+export type WorldCheckResult = z.infer<typeof WorldCheckResult>;
+
 export const TaskRecord = z.object({
   id: TaskId,
   factoryVersion: z.string(),
@@ -111,6 +126,12 @@ export const TaskRecord = z.object({
   evidence: z.array(Evidence),
   scores: z.array(Score),
   outcomes: z.array(Outcome),
+  /** Who asked for the task (code-host login), when known. Optional: older records predate it. */
+  requestedBy: z.string().nullable().optional(),
+  /** Labels on the issue when the task started. */
+  labels: z.array(z.string()).optional(),
+  /** OpenWorld runs of the PR's heads, oldest first. */
+  worldChecks: z.array(WorldCheckResult).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -388,6 +409,73 @@ export function mergeOf(record: TaskRecord): MergedTask | null {
   return { record, mergeSha: sha, mergedAt: m.at };
 }
 
+/**
+ * OpenWorld check: deploy a PR head into the team's simulated world, run `simDays` of traffic, report the
+ * invariants. The task job calls it once per settled PR head and records a `world_check` event.
+ */
+export interface WorldCheck {
+  readonly name: string;
+  run(input: { task: TaskRecord; repo: RepoRef; headSha: string; world: string; simDays: number }, signal?: AbortSignal): Promise<WorldCheckResult>;
+}
+
+// ───────────────────────────── people and teams ─────────────────────────────
+
+export const TeamMember = z.object({ login: z.string(), name: z.string().nullable(), role: z.enum(["member", "maintainer"]) });
+export type TeamMember = z.infer<typeof TeamMember>;
+
+/** A team as the org already defines it (GitHub team, SSO group). The factory never invents teams. */
+export const Team = z.object({
+  slug: z.string(),
+  name: z.string(),
+  /** Where the team comes from, e.g. "github:acme/payments" or "config". */
+  source: z.string(),
+  members: z.array(TeamMember),
+  /** Repos the team owns ("owner/name"), from the directory, CODEOWNERS or config. */
+  repos: z.array(z.string()),
+  /** The factory the team's tasks run on ("default" unless the team has its own). */
+  factory: z.string(),
+});
+export type Team = z.infer<typeof Team>;
+
+/** Teams and their people, from the org's directory (GitHub teams, SCIM groups, or factory.yaml). */
+export interface Directory {
+  readonly name: string;
+  teams(): Promise<Team[]>;
+}
+
+// ───────────────────────────── app state ─────────────────────────────
+
+export const ViewShare = z.enum(["me", "team", "org", "link"]);
+export type ViewShare = z.infer<typeof ViewShare>;
+
+/** A saved view: a name plus the app URL that holds its scope, filters, measure and grouping. */
+export const SavedView = z.object({
+  id: z.string(),
+  name: z.string().min(1).max(120),
+  /** App path with its query string, e.g. "/insights?scope=team:payments&measure=came_back&by=kind". */
+  path: z.string().startsWith("/").max(2000),
+  owner: z.string(),
+  share: ViewShare,
+  /** The team it is shared with when share is "team". */
+  team: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type SavedView = z.infer<typeof SavedView>;
+
+export const RolloutState = z.object({
+  factory: z.string(),
+  /** Version new tasks run on. Null: whatever the server is running. */
+  live: z.string().nullable(),
+  /** A version under trial, and the share of new tasks it gets (0 to 1). */
+  candidate: z.string().nullable(),
+  share: z.number().min(0).max(1),
+  updatedBy: z.string(),
+  updatedAt: z.string(),
+  note: z.string().nullable(),
+});
+export type RolloutState = z.infer<typeof RolloutState>;
+
 /** Read access to the ledger, for scorers, the dashboard and benchmarks. */
 export interface LedgerReader {
   getTask(id: TaskId): Promise<TaskRecord | null>;
@@ -414,6 +502,10 @@ export type Abstractions = {
   evidence: EvidenceStore;
   /** Not in ABSTRACTION_KEYS: a factory has several, listed under factory.yaml `outcomes.sources`. */
   outcomes: OutcomeSource;
+  /** Not in ABSTRACTION_KEYS: configured under factory.yaml `teams:`. */
+  directory: Directory;
+  /** Not in ABSTRACTION_KEYS: configured under factory.yaml `world:`. */
+  worldCheck: WorldCheck;
 };
 export type AbstractionKey = keyof Abstractions;
 export const ABSTRACTION_KEYS = [
