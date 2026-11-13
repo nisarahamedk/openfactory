@@ -50,6 +50,9 @@ importers:
       '@hono/node-server':
         specifier: 1.19.6
         version: 1.19.6(hono@4.10.4)
+      '@openfactory/agent-acp':
+        specifier: workspace:*
+        version: link:../../plugins/agent-acp
       '@openfactory/bench':
         specifier: workspace:*
         version: link:../../packages/bench
@@ -59,6 +62,9 @@ importers:
       '@openfactory/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@openfactory/env-devspace':
+        specifier: workspace:*
+        version: link:../../plugins/env-devspace
       '@openfactory/foreman':
         specifier: workspace:*
         version: link:../../packages/foreman
@@ -77,6 +83,12 @@ importers:
       '@openfactory/task-job':
         specifier: workspace:*
         version: link:../../packages/task-job
+      '@openfactory/workspace-k8s':
+        specifier: workspace:*
+        version: link:../../plugins/workspace-k8s
+      '@openfactory/workspace-local':
+        specifier: workspace:*
+        version: link:../../plugins/workspace-local
       hono:
         specifier: 4.10.4
         version: 4.10.4
