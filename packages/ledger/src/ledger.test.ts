@@ -1,6 +1,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { beforeEach, describe, expect, it } from "vitest";
+import type { TaskId } from "@openfactory/contracts";
 import { Ledger } from "./store.js";
 
 const repo = { host: "github" as const, owner: "acme", name: "app" };
