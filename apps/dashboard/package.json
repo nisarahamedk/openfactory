@@ -1,0 +1,20 @@
+{
+  "name": "@openfactory/dashboard",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@openfactory/contracts": "workspace:*",
+    "@openfactory/scoring": "workspace:*",
+    "@hono/node-server": "1.19.6",
+    "hono": "4.10.4",
+    "zod": "4.1.12",
+    "@openfactory/bench": "workspace:*"
+  }
+}
