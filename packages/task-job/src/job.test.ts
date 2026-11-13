@@ -369,3 +369,65 @@ describe("restart", () => {
     await jobs.close();
   }, 30_000);
 });
+
+describe("job state in Postgres", () => {
+  it("moves a task to another server: the new server carries on the same session, and leaves a held task alone", async () => {
+    const { JobLog, runMigrations } = await import("@openfactory/ledger");
+    const w = world();
+    const db = drizzle(new PGlite());
+    await runMigrations(db);
+    const ledger = new Ledger(db);
+    const jobLog = new JobLog(db);
+    const faux = fauxProvider({ provider: "foreman-faux", models: [{ id: "haiku" }] });
+    faux.setResponses(Array.from({ length: 10 }, () => fauxAssistantMessage("On it.")));
+    const models = createModels();
+    models.setProvider(faux.provider);
+    const logs: string[] = [];
+    const server = (holder: string) =>
+      new TaskJobs(
+        {
+          ledger,
+          rules: { label: "factory", botLogins: [], maxTaskUsd: 10, maxReviewRounds: 3 },
+          chat: w.chat,
+          codeForge: w.codeForge,
+          agent: w.agent,
+          workspace: w.workspace,
+          environment: w.environment,
+          modelKeys: null,
+          evidence: { put: async (t, name) => ({ url: `https://factory/evidence/${t}/${name}` }) },
+          scorers: factScorers,
+          sinks: [],
+          config: { baseBranch: "main", workerImage: null, agentEnv: {}, maxNudges: 1, branchPrefix: "factory/" },
+          log: (m) => void logs.push(`${holder}: ${m}`),
+        },
+        // Each server has its own empty data dir: nothing about the job lives on disk.
+        { dataDir: mkdtempSync(join(tmpdir(), "jobs-")), models, foremanModel: { provider: "foreman-faux", modelId: "haiku" }, factoryVersion: () => "fv_test", harnessInfo: { name: "fake-agent", model: "fake" }, jobLog, holder, leaseMs: 60_000 },
+      );
+
+    const a = server("srv-a");
+    const base = { repo, at: new Date().toISOString(), actor: { login: "nisar", isBot: false } };
+    const started = await a.handle({ ...base, id: "p1", type: "issue_labeled", issueNumber: 9, label: "factory", title: "Dark mode", body: "Add it", labels: ["factory"] });
+    const taskId = started.taskId!;
+    await a.idle(taskId);
+    expect((await ledger.getTask(taskId))!.status).toBe("awaiting_review");
+    expect(await jobLog.has(taskId)).toBe(true);
+
+    // While srv-a holds the task, srv-b leaves its review comment to srv-a (and doesn't mark it seen).
+    const b = server("srv-b");
+    expect(await b.resumeAll()).toEqual({ resumed: 0, rebuilt: 0 });
+    const comment: Signal = { ...base, id: "p2", type: "pr_review_comment", prNumber: 41, body: "Use the system theme", path: null };
+    expect((await b.handle(comment)).kind).toBe("ignore");
+    expect(await ledger.seen("signal:p2")).toBe(false);
+
+    // srv-a shuts down; srv-b takes the task over from Postgres and resumes the same agent session.
+    await a.close();
+    expect(await b.resumeAll()).toEqual({ resumed: 1, rebuilt: 0 });
+    expect((await b.handle(comment)).kind).toBe("review_round");
+    await b.idle(taskId);
+    const r = (await ledger.getTask(taskId))!;
+    expect(r.status).toBe("awaiting_review");
+    expect(r.people.reviewRounds).toBe(1);
+    expect(w.sessions).toEqual(["sess-1", "sess-1"]);
+    await b.close();
+  }, 30_000);
+});

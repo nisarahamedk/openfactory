@@ -6,7 +6,7 @@ This page installs the whole factory into your own Kubernetes cluster with one H
 
 | Piece | What it does | Notes |
 |---|---|---|
-| Server | Watches your repos, runs tasks, and keeps the ledger and evidence | 1 replica; a PVC holds evidence and benchmarks |
+| Server | Watches your repos, runs tasks, and keeps the ledger and evidence | 1 replica; a PVC holds evidence and benchmarks. Task jobs keep their state in Postgres (`server.jobState`), so a restarted or replacement server carries each task on |
 | Dashboard | Runs, metrics and transcripts | Basic auth (user `factory`) |
 | Postgres | Ledger plus LiteLLM's key store | Optional; bring your own with `postgres.enabled=false` |
 | LiteLLM | Model gateway. Holds provider keys, gives each task its own capped key | Proxy-wide budget is `litellm.budgetUsd` |

@@ -80,6 +80,8 @@ export type AppDeps = {
 export function createApp(d: AppDeps): Hono {
   const app = new Hono();
   app.onError((err, c) => {
+    // Another factory server runs this task's job right now (see TaskJobs leases): the caller can try again.
+    if (err.name === "TaskBusy") return c.json({ code: "BUSY", message: err.message }, 409);
     d.log("http error", { path: c.req.path, error: String(err) });
     return c.json({ code: "INTERNAL", message: "internal error" }, 500);
   });

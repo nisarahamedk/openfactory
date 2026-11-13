@@ -6,6 +6,8 @@ const Env = z.object({
   PUBLIC_URL: z.string().url(), // where reviewers open evidence, e.g. https://factory.1-2-3-4.sslip.io
   DATABASE_URL: z.string(),
   DATA_DIR: z.string().default("/data"),
+  /** Where durable task jobs keep their state: "postgres" (any server can carry a task on) or "files" (SQLite per task under DATA_DIR). */
+  JOB_STATE: z.enum(["postgres", "files"]).default("postgres"),
   FACTORY_API_TOKEN: z.string().optional(), // bearer for /v1; unset = open (dev only)
   FACTORY_VERSION: z.string().default("fv_dev"),
   /** factory.yaml with `providers:`; env vars below fill anything it leaves out. */

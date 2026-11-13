@@ -50,6 +50,7 @@ spec:
             - { name: PORT, value: "3000" }
             - { name: PUBLIC_URL, value: {{ .Values.publicUrl | quote }} }
             - { name: DATA_DIR, value: /data }
+            - { name: JOB_STATE, value: {{ .Values.server.jobState | default "postgres" | quote }} }
             - { name: BENCH_DIR, value: /data/bench }
             - { name: FACTORY_FILE, value: /etc/openfactory/factory.yaml }
             - { name: FACTORY_REPOS, value: {{ required "repos: list at least one owner/name" (join "," .Values.repos) | quote }} }

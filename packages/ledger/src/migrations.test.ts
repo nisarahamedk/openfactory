@@ -14,6 +14,7 @@ const RELEASED: Record<number, string> = {
   1: "573049a040d4",
   2: "5afc4ddb6df5",
   3: "78329a2e887b",
+  4: "aeaf7b21411b",
 };
 
 const hash = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 12);
@@ -39,7 +40,7 @@ describe("migrations", () => {
       harness: { name: "h", model: "m" },
     });
 
-    expect(await runMigrations(db)).toEqual([1, 2, 3]);
+    expect(await runMigrations(db)).toEqual([1, 2, 3, 4]);
     expect(await runMigrations(db)).toEqual([]);
     expect((await new Ledger(db).getTask("task_old" as never))?.title).toBe("t");
 
