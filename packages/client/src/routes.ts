@@ -17,6 +17,7 @@ export const FactoryInfo = z
     prompts: z.object({ system: z.string(), intake: z.string(), review: z.string(), foreman: z.string() }),
   })
   .meta({ description: "This factory" });
+export type FactoryInfo = z.infer<typeof FactoryInfo>;
 
 /** Body of POST /v1/tasks/{id}/cancel. */
 export const CancelTask = z.object({ by: z.string().max(100).optional(), reason: z.string().max(1000).optional() }).meta({ id: "CancelTask" });

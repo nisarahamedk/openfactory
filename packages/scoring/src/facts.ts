@@ -153,3 +153,15 @@ export function formatDuration(seconds: number): string {
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
 }
+
+/** What each built-in scorer measures, for the dashboard's scorers page. Keyed by scorer name. */
+export const scorerDocs: Record<string, { title: string; measures: string; kind: "pass_fail" | "count" | "usd" | "seconds" }> = {
+  "facts.merged": { title: "Merged", measures: "1 if a person merged the PR, 0 if the task ended any other way.", kind: "pass_fail" },
+  "facts.review_rounds": { title: "Review rounds", measures: "Agent turns started by PR review feedback. Fewer means the first version was closer to right.", kind: "count" },
+  "facts.ci_first_pass": { title: "CI green on first push", measures: "1 if every check passed on the PR's first commit.", kind: "pass_fail" },
+  "facts.cost_usd": { title: "Model cost", measures: "Model spend for the task, in USD, through the factory's model proxy.", kind: "usd" },
+  "facts.lead_time_s": { title: "Ask to done", measures: "Time from the task being received to merged, closed or failed.", kind: "seconds" },
+  ...Object.fromEntries(
+    STAGES.map((s) => [`facts.stage_s.${s}`, { title: `Time in ${s.replace("_", " ")}`, measures: `Total time the task spent in "${s}".`, kind: "seconds" as const }]),
+  ),
+};
