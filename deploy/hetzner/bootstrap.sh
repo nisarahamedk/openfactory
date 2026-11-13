@@ -23,7 +23,13 @@ for s in dxfake:DXFAKE_TOKEN dashboard:DASHBOARD_PASSWORD factory-api:FACTORY_AP
   has "${s%%:*}" || kubectl -n factory create secret generic "${s%%:*}" --from-literal="${s##*:}=$(rand)" >/dev/null
 done
 kubectl apply -f "$root/deploy/platform/postgres.yaml" -f "$root/deploy/platform/litellm.yaml" \
-  -f "$root/deploy/platform/network-policies.yaml"
+  -f "$root/deploy/platform/egress.yaml"
+# The egress collector posts to the server with the factory API token; copy it (value never printed).
+kubectl -n factory get secret factory-api -o json \
+  | jq '{apiVersion, kind, type, data, metadata: {name: .metadata.name, namespace: "factory-egress"}}' \
+  | kubectl apply -f - >/dev/null
+node_ip=$(kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes -o jsonpath='{.items[0].endpoints[0].addresses[0]}')
+sed "s/__NODE_IP__/$node_ip/" "$root/deploy/platform/network-policies.yaml" | kubectl apply -f -
 # The boot-time debug page is only for when the API isn't reachable yet; take it down now.
 kubectl -n kube-system delete pod/debug-page svc/debug-page ingressroute/debug-page --ignore-not-found >/dev/null
 kubectl -n factory rollout status statefulset/postgres --timeout=300s

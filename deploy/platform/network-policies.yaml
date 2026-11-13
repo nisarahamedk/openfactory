@@ -39,3 +39,44 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: { name: default-deny-ingress, namespace: factory-workspaces }
 spec: { podSelector: {}, policyTypes: [Ingress] }
+---
+# Sandboxes have no route out except: cluster DNS, the egress proxy (allowlist, logged),
+# the model proxy, and the Kubernetes API (devspace/kubectl with the task's namespace-scoped token).
+# __NODE_IP__ is the API server's endpoint (k3s runs it on the node); bootstrap.sh fills it in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: egress-only-via-proxy, namespace: factory-workspaces }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }, podSelector: { matchLabels: { k8s-app: kube-dns } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: factory-egress } }, podSelector: { matchLabels: { app: egress-proxy } } }]
+      ports: [{ port: 3128 }]
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: factory } }, podSelector: { matchLabels: { app: litellm } } }]
+      ports: [{ port: 4000 }]
+    - to: [{ ipBlock: { cidr: __NODE_IP__/32 } }]
+      ports: [{ port: 6443 }]
+---
+# The proxy takes connections only from sandboxes.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-sandboxes-only, namespace: factory-egress }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: factory-workspaces } } }]
+      ports: [{ port: 3128 }]
+---
+# The egress collector posts its per-task report to the server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-egress-collector, namespace: factory }
+spec:
+  podSelector: { matchLabels: { app: openfactory } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: factory-egress } } }]
+      ports: [{ port: 3000 }]

@@ -1,0 +1,219 @@
+# Egress proxy for worker sandboxes (docs/plugins.md, "Sandbox security").
+#
+# Sandboxes in factory-workspaces have no route to the internet except this proxy (see
+# network-policies.yaml). The proxy allows only the hosts in the allowlist below and logs
+# every request, allowed or denied. The collector sidecar aggregates that log per task,
+# host and minute and posts it to the factory server's POST /v1/egress.
+#
+# Workspace pods get HTTPS_PROXY/HTTP_PROXY/NO_PROXY through WORKSPACE_EGRESS_PROXY and WORKSPACE_NO_PROXY on the server.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: factory-egress
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: egress-proxy
+  namespace: factory-egress
+data:
+  # One host per line. A leading dot allows the domain and every subdomain.
+  allowlist.txt: |
+    github.com
+    api.github.com
+    codeload.github.com
+    objects.githubusercontent.com
+    raw.githubusercontent.com
+    registry.npmjs.org
+    # DevSpace downloads helm on first use (until the worker image ships it).
+    get.helm.sh
+    # Clerk dev instance: the app's sign-in page and the e2e tests' test-user setup.
+    .clerk.accounts.dev
+    api.clerk.com
+    img.clerk.com
+    .178.105.22.96.sslip.io
+  squid.conf: |
+    http_port 3128
+    pid_filename /tmp/squid.pid
+    coredump_dir /tmp
+    cache deny all
+    cache_mem 8 MB
+    dns_v4_first on
+    acl SSL_ports port 443
+    acl Safe_ports port 80 443
+    acl CONNECT method CONNECT
+    acl allowed dstdomain "/etc/squid-egress/allowlist.txt"
+    http_access deny !Safe_ports
+    http_access deny CONNECT !SSL_ports
+    http_access allow allowed
+    http_access deny all
+    # epoch, client ip, squid status/http status, method, url (host:port for CONNECT)
+    logformat egress %ts %>a %Ss/%>Hs %rm %ru
+    access_log stdio:/var/log/egress/access.log egress
+    cache_log stdio:/dev/stderr
+    logfile_rotate 0
+    forwarded_for delete
+    via off
+  collector.py: |
+    """Aggregate the proxy's access log per (task, host, allowed, minute) and post it to the factory.
+
+    Source pod IPs are mapped to tasks with the openfactory.dev/task label on workspace pods.
+    Reports for a minute are sent once the minute is over; failed posts are retried next round.
+    """
+    import json, os, ssl, time, urllib.request
+    from urllib.parse import urlsplit
+
+    LOG = "/var/log/egress/access.log"
+    NS = os.environ.get("WORKSPACE_NAMESPACE", "factory-workspaces")
+    FACTORY = os.environ["FACTORY_URL"].rstrip("/")
+    TOKEN = os.environ["FACTORY_API_TOKEN"]
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    API = "https://kubernetes.default.svc"
+    ctx = ssl.create_default_context(cafile=f"{SA}/ca.crt")
+
+    def pods_by_ip():
+        req = urllib.request.Request(f"{API}/api/v1/namespaces/{NS}/pods?labelSelector=openfactory.dev/task",
+                                     headers={"Authorization": "Bearer " + open(f"{SA}/token").read().strip()})
+        with urllib.request.urlopen(req, context=ctx, timeout=10) as r:
+            items = json.load(r)["items"]
+        return {p["status"].get("podIP"): p["metadata"]["labels"]["openfactory.dev/task"] for p in items if p["status"].get("podIP")}
+
+    def host_of(method, url):
+        if method == "CONNECT":
+            return url.rsplit(":", 1)[0]
+        return urlsplit(url).hostname or url
+
+    def post(entries):
+        body = json.dumps({"entries": entries}).encode()
+        req = urllib.request.Request(f"{FACTORY}/v1/egress", data=body, method="POST",
+                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {TOKEN}"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status
+
+    def iso(t):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+    while not os.path.exists(LOG):
+        time.sleep(1)
+    f = open(LOG)
+    buckets = {}   # (ip, host, allowed, minute) -> count
+    pending = []   # entries waiting to be posted
+    ips = {}
+    last_flush = 0
+    while True:
+        line = f.readline()
+        if line:
+            parts = line.split()
+            if len(parts) >= 5 and parts[3] != "-":  # "-" = probe connections that sent nothing
+                ts, ip, status, method, url = float(parts[0]), parts[1], parts[2], parts[3], parts[4]
+                allowed = not status.startswith("TCP_DENIED")
+                key = (ip, host_of(method, url), allowed, int(ts // 60) * 60)
+                buckets[key] = buckets.get(key, 0) + 1
+            continue
+        time.sleep(1)
+        now = time.time()
+        if now - last_flush < 15:
+            continue
+        last_flush = now
+        done = [k for k in buckets if k[3] + 60 <= now]
+        if done:
+            try:
+                ips = pods_by_ip()
+            except Exception as e:
+                print("pod lookup failed:", e, flush=True)
+            for k in done:
+                ip, host, allowed, minute = k
+                count = buckets.pop(k)
+                task = ips.get(ip)
+                if task is None:
+                    print(f"untracked source {ip} -> {host} allowed={allowed} count={count}", flush=True)
+                    continue
+                pending.append({"taskId": task, "host": host, "allowed": allowed, "count": count,
+                                "from": iso(minute), "to": iso(minute + 60)})
+        if pending:
+            try:
+                post(pending[:500])
+                pending = pending[500:]
+            except Exception as e:
+                print("post failed (will retry):", e, flush=True)
+                pending = pending[-5000:]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: egress-collector
+  namespace: factory-egress
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: egress-collector-read-pods
+  namespace: factory-workspaces
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: egress-collector-read-pods
+  namespace: factory-workspaces
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: egress-collector-read-pods }
+subjects:
+  - { kind: ServiceAccount, name: egress-collector, namespace: factory-egress }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: egress-proxy
+  namespace: factory-egress
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: egress-proxy } }
+  template:
+    metadata:
+      labels: { app: egress-proxy }
+      annotations: { egress/config-version: "4" }
+    spec:
+      serviceAccountName: egress-collector
+      containers:
+        - name: squid
+          image: ubuntu/squid:6.6-24.04_edge
+          command: ["sh", "-c", "touch /var/log/egress/access.log && chmod 666 /var/log/egress/access.log && exec squid -N -f /etc/squid-egress/squid.conf"]
+          ports: [{ containerPort: 3128, name: proxy }]
+          readinessProbe: { tcpSocket: { port: 3128 }, periodSeconds: 5 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            - { name: config, mountPath: /etc/squid-egress }
+            - { name: logs, mountPath: /var/log/egress }
+        - name: collector
+          image: python:3.13-alpine
+          command: ["python3", "-u", "/etc/squid-egress/collector.py"]
+          env:
+            - { name: FACTORY_URL, value: "http://openfactory.factory.svc:3000" }
+            - { name: WORKSPACE_NAMESPACE, value: factory-workspaces }
+            - name: FACTORY_API_TOKEN
+              valueFrom: { secretKeyRef: { name: factory-api, key: FACTORY_API_TOKEN } }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          volumeMounts:
+            - { name: config, mountPath: /etc/squid-egress }
+            - { name: logs, mountPath: /var/log/egress }
+      volumes:
+        - { name: config, configMap: { name: egress-proxy } }
+        - { name: logs, emptyDir: { sizeLimit: 512Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress-proxy
+  namespace: factory-egress
+spec:
+  selector: { app: egress-proxy }
+  ports: [{ name: proxy, port: 3128, targetPort: 3128 }]
