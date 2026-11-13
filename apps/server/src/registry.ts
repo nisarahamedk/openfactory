@@ -10,6 +10,7 @@
  *     workspace: { k8s: {} }
  *     devEnvironment: devspace
  *     metrics: dxfake
+ *     evidence: { s3: { endpoint: https://<acct>.r2.cloudflarestorage.com, bucket: evidence, region: auto } }
  *
  * A provider name is a short alias (below), `provider-<name>` under @openfactory, or a full package name.
  * The package exports `provider: Provider` (preferred) or, for one abstraction, `fromEnv(env)` (older form).
@@ -37,6 +38,8 @@ const ALIASES: Record<string, string> = {
   litellm: "@openfactory/models-litellm",
   infisical: "@openfactory/secrets-infisical",
   "secrets:k8s": "@openfactory/secrets-k8s",
+  disk: "@openfactory/evidence-disk",
+  s3: "@openfactory/evidence-s3",
 };
 
 export type Selection = { name: string; options: Record<string, unknown> };

@@ -372,6 +372,7 @@ export type Abstractions = {
   metrics: MetricsSink;
   modelGateway: ModelGateway;
   secrets: Secrets;
+  evidence: EvidenceStore;
 };
 export type AbstractionKey = keyof Abstractions;
 export const ABSTRACTION_KEYS = [
@@ -384,6 +385,7 @@ export const ABSTRACTION_KEYS = [
   "metrics",
   "modelGateway",
   "secrets",
+  "evidence",
 ] as const satisfies readonly AbstractionKey[];
 
 export interface ProviderContext {

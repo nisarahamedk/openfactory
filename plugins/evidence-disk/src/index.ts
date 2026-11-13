@@ -51,3 +51,18 @@ async function atomicWrite(path: string, data: Uint8Array | string): Promise<voi
   await writeFile(tmp, data);
   await rename(tmp, path);
 }
+
+import { defineProvider } from "@openfactory/contracts";
+
+/** factory.yaml: `evidence: { disk: { dir: /data/evidence } }`; env fallback DATA_DIR + PUBLIC_URL. */
+export const provider = defineProvider({
+  name: "disk",
+  provides: {
+    evidence: (ctx) => {
+      const dir = typeof ctx.options.dir === "string" ? ctx.options.dir : ctx.env.DATA_DIR ? `${ctx.env.DATA_DIR}/evidence` : null;
+      const publicUrl = ctx.env.PUBLIC_URL;
+      if (dir === null || !publicUrl) throw new Error("disk evidence provider: dir (or DATA_DIR) and PUBLIC_URL are required");
+      return new DiskEvidenceStore({ dir, publicUrl });
+    },
+  },
+});

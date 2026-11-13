@@ -69,3 +69,38 @@ export class S3EvidenceStore implements EvidenceStore {
     return `${this.cfg.serverUrl.replace(/\/$/, "")}/evidence/${key}`;
   }
 }
+
+import { defineProvider } from "@openfactory/contracts";
+
+const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+
+/**
+ * factory.yaml:
+ *   evidence: { s3: { endpoint: https://..., bucket: evidence, region: auto, prefix: "evidence/", publicBaseUrl: null } }
+ * Credentials from env: S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY (names overridable with accessKeyEnv / secretKeyEnv).
+ */
+export const provider = defineProvider({
+  name: "s3",
+  provides: {
+    evidence: (ctx) => {
+      const o = ctx.options;
+      const endpoint = str(o.endpoint) ?? str(ctx.env.S3_ENDPOINT);
+      const bucket = str(o.bucket) ?? str(ctx.env.S3_BUCKET);
+      const accessKeyId = str(ctx.env[str(o.accessKeyEnv) ?? "S3_ACCESS_KEY_ID"]);
+      const secretAccessKey = str(ctx.env[str(o.secretKeyEnv) ?? "S3_SECRET_ACCESS_KEY"]);
+      const serverUrl = str(ctx.env.PUBLIC_URL);
+      if (!endpoint || !bucket || !accessKeyId || !secretAccessKey || !serverUrl)
+        throw new Error("s3 evidence provider: endpoint, bucket, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY and PUBLIC_URL are required");
+      return new S3EvidenceStore({
+        endpoint,
+        bucket,
+        region: str(o.region) ?? str(ctx.env.S3_REGION) ?? "auto",
+        accessKeyId,
+        secretAccessKey,
+        prefix: str(o.prefix) ?? "evidence/",
+        publicBaseUrl: str(o.publicBaseUrl),
+        serverUrl,
+      });
+    },
+  },
+});
