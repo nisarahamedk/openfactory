@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { BenchmarkTask, LedgerEvent, TaskRecord, type LedgerReader, type TaskId, type TaskStatus } from "@openfactory/contracts";
 import { BenchRun } from "@openfactory/bench";
+import { FactoryInfo } from "./routes.js";
 
 export interface FactoryApiConfig {
   baseUrl: string;
@@ -81,6 +82,35 @@ export class FactoryApi implements LedgerReader {
 
   benchRun(id: string): Promise<BenchRun> {
     return this.call("GET", `/v1/bench/runs/${encodeURIComponent(id)}`, oneOf(BenchRun, "run"));
+  }
+
+  /** This factory's version, providers, rules and prompts (secret-looking options redacted by the server). */
+  factory(): Promise<FactoryInfo> {
+    return this.call("GET", "/v1/factory", oneOf(FactoryInfo, "factory"));
+  }
+
+  /** Stop a task: aborts its job, sleeps the environment, marks it failed (stage "cancelled"). */
+  cancel(id: TaskId, input: { by?: string; reason?: string } = {}): Promise<TaskRecord> {
+    return this.call("POST", `/v1/tasks/${id}/cancel`, oneOf(TaskRecord, "task"), input);
+  }
+
+  /**
+   * One turn's transcript (JSONL) from the server's /evidence route; null if missing.
+   * `key` comes from a transcript_saved event, e.g. "transcript-1.jsonl".
+   */
+  async transcript(id: TaskId, key: string): Promise<string | null> {
+    const f = this.cfg.fetch ?? fetch;
+    const headers: Record<string, string> = {};
+    if (this.cfg.token !== null) headers.authorization = `Bearer ${this.cfg.token}`;
+    let res: Response;
+    try {
+      res = await f(new URL(`/evidence/${id}/${encodeURIComponent(key)}`, this.cfg.baseUrl), { headers });
+    } catch (err) {
+      throw new FactoryApiError(0, `factory server unreachable: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (res.status === 404) return null;
+    if (!res.ok) throw new FactoryApiError(res.status, `GET transcript ${key} failed with ${res.status}`);
+    return res.text();
   }
 
   startBenchRun(input: {
