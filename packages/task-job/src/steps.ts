@@ -129,18 +129,18 @@ export async function runTurn(
 export async function ensurePr(deps: JobDeps, taskId: TaskId, summary: string): Promise<TaskRecord> {
   let record = await mustTask(deps, taskId);
   const branch = branchFor(deps, record);
-  let pr = await deps.codeHost.findPullRequestForBranch(record.source.repo, branch);
+  let pr = await deps.codeForge.findPullRequestForBranch(record.source.repo, branch);
   if (!pr && !record.pr) {
     try {
       const issue = record.source.issueNumber;
-      const opened = await deps.codeHost.openPullRequest({
+      const opened = await deps.codeForge.openPullRequest({
         repo: record.source.repo,
         head: branch,
         base: deps.config.baseBranch,
         title: record.title,
         body: `${summary.slice(0, 6000)}\n\n---\n${issue ? `Closes #${issue}. ` : ""}Opened by the factory for task \`${record.id}\` (factory version \`${record.factoryVersion}\`). Comment on this PR to request changes; the same agent session picks them up.`,
       });
-      pr = await deps.codeHost.findPullRequestForBranch(record.source.repo, branch);
+      pr = await deps.codeForge.findPullRequestForBranch(record.source.repo, branch);
       if (!pr) pr = { ...opened, headSha: "" };
     } catch (e) {
       deps.log("open PR failed (branch not pushed?)", { taskId, error: String(e) });

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
-import { GitHubBundlePusher, GitHubChat, GitHubClient, GitHubCodeHost, GitHubPollingSource, parseWebhook } from "@openfactory/code-github";
+import { GitHubBundlePusher, GitHubChat, GitHubClient, GitHubCodeForge, GitHubPollingSource, parseWebhook } from "@openfactory/github";
 import type { AgentHarness, MetricsSink, Signal } from "@openfactory/contracts";
 import { FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
@@ -50,14 +50,14 @@ async function main() {
   const sinks: MetricsSink[] = cfg.DXFAKE_URL && cfg.DXFAKE_TOKEN ? [new DxFakeSink({ baseUrl: cfg.DXFAKE_URL, token: cfg.DXFAKE_TOKEN })] : [];
   const evidence = fileEvidenceStore(join(cfg.DATA_DIR, "evidence"), cfg.PUBLIC_URL);
   const chat = new GitHubChat(gh);
-  const codeHost = new GitHubCodeHost(gh, { token: () => cfg.GITHUB_TOKEN });
+  const codeForge = new GitHubCodeForge(gh, { token: () => cfg.GITHUB_TOKEN });
 
   const jobs = new TaskJobs(
     {
       ledger,
       rules: { label: cfg.FACTORY_LABEL, botLogins, maxTaskUsd: cfg.MAX_TASK_USD, maxReviewRounds: cfg.MAX_REVIEW_ROUNDS },
       chat,
-      codeHost,
+      codeForge,
       agent,
       workspace,
       environment,

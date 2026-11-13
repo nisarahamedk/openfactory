@@ -16,8 +16,8 @@ import { verify } from "@octokit/webhooks-methods";
 import {
   FACTORY_MARKER,
   Signal,
-  type ChatSurface,
-  type CodeHost,
+  type Chat,
+  type CodeForge,
   type RepoRef,
   type SignalSource,
 } from "@openfactory/contracts";
@@ -62,7 +62,7 @@ export class GitHubClient {
 
 const r = (repo: RepoRef) => `/repos/${repo.owner}/${repo.name}`;
 
-export class GitHubChat implements ChatSurface {
+export class GitHubChat implements Chat {
   readonly name = "github";
   constructor(private readonly gh: GitHubClient) {}
   async post(target: { repo: RepoRef; issueOrPr: number }, markdown: string): Promise<{ url: string }> {
@@ -75,7 +75,7 @@ export class GitHubChat implements ChatSurface {
 
 type Pull = { number: number; html_url: string; head: { sha: string; ref: string }; state: string };
 
-export class GitHubCodeHost implements CodeHost {
+export class GitHubCodeForge implements CodeForge {
   readonly name = "github";
   constructor(
     private readonly gh: GitHubClient,

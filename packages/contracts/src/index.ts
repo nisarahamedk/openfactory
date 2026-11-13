@@ -175,13 +175,18 @@ export interface SignalSource {
 export const FACTORY_MARKER = "<!-- openfactory -->";
 
 /** Talking to people where the task started (issue, PR, chat thread). Implementations append FACTORY_MARKER. */
-export interface ChatSurface {
+export interface Chat {
   readonly name: string;
   post(target: { repo: RepoRef; issueOrPr: number }, markdown: string): Promise<{ url: string }>;
 }
 
-/** Repository operations the job needs outside the sandbox. */
-export interface CodeHost {
+/** @deprecated Use CodeForge. Kept one release for open branches. */
+export type CodeHost = CodeForge;
+/** @deprecated Use Chat. */
+export type ChatSurface = Chat;
+
+/** Repository operations the job needs outside the sandbox (branches, PRs, push credentials). */
+export interface CodeForge {
   readonly name: string;
   openPullRequest(input: {
     repo: RepoRef;

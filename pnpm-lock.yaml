@@ -56,9 +56,6 @@ importers:
       '@openfactory/bench':
         specifier: workspace:*
         version: link:../../packages/bench
-      '@openfactory/code-github':
-        specifier: workspace:*
-        version: link:../../plugins/code-github
       '@openfactory/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -68,6 +65,9 @@ importers:
       '@openfactory/foreman':
         specifier: workspace:*
         version: link:../../packages/foreman
+      '@openfactory/github':
+        specifier: workspace:*
+        version: link:../../plugins/github
       '@openfactory/ledger':
         specifier: workspace:*
         version: link:../../packages/ledger
@@ -223,20 +223,20 @@ importers:
         specifier: workspace:*
         version: link:../workspace-local
 
-  plugins/code-github:
-    dependencies:
-      '@octokit/webhooks-methods':
-        specifier: 6.0.0
-        version: 6.0.0
-      '@openfactory/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
-
   plugins/env-devspace:
     dependencies:
       '@kubernetes/client-node':
         specifier: 1.4.0
         version: 1.4.0(bare-buffer@3.7.2)
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+
+  plugins/github:
+    dependencies:
+      '@octokit/webhooks-methods':
+        specifier: 6.0.0
+        version: 6.0.0
       '@openfactory/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
