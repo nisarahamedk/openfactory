@@ -25,14 +25,15 @@ function mockRunner(): string {
   return `${mockSource}
 import { appendFileSync } from "node:fs";
 startMockAnthropic([
-  (r) => { appendFileSync("/work/mock/requests.log", JSON.stringify({ tools: r.hasTools, toolResult: r.lastIsToolResult, last: r.lastUserText.slice(-200), n: r.messages.length }) + "\n"); return null; },
-  (r) => r.lastUserText.includes("ROUND1") && !r.lastIsToolResult
+  (r) => { appendFileSync("/work/mock/requests.log", JSON.stringify({ tools: r.hasTools, toolResult: r.lastIsToolResult, last: r.lastUserText.slice(-200), n: r.messages.length }) + String.fromCharCode(10)); return null; },
+  // Each round: the prompt gets one tool call, anything after it gets a summary.
+  (r) => r.lastUserText.includes("ROUND1") && !r.transcript.includes("ROUND2")
     ? [{ type: "tool_use", name: "Bash", input: { command: "kubectl get pods -o name > pods.txt; kubectl -n default get pods > forbidden.txt 2>&1; echo r1 > round.txt", description: "check env" } }] : null,
-  (r) => r.lastUserText.includes("ROUND2") && !r.lastIsToolResult
+  (r) => r.lastUserText.includes("ROUND2")
     ? [{ type: "tool_use", name: "Bash", input: { command: "echo r2 >> round.txt", description: "round 2" } }] : null,
-  (r) => r.lastIsToolResult && r.transcript.includes("ROUND2")
+  (r) => r.transcript.includes("ROUND2")
     ? [{ type: "text", text: r.transcript.includes("ROUND1") ? "remembered ROUND1" : "forgot ROUND1" }] : null,
-  (r) => r.lastIsToolResult ? [{ type: "text", text: "round done" }] : null,
+  (r) => [{ type: "text", text: "round done" }],
 ], 18080).then(() => console.log("mock ready"));
 `;
 }
@@ -61,7 +62,7 @@ test.runIf(run)("worker path on a real cluster: env, workspace, agent, sleep, wa
     expect(skill.stdout).toContain(environment.name);
 
     await ws.writeFile("/work/mock/mock.mjs", mockRunner());
-    const mock = await ws.spawn(["node", "/work/mock/mock.mjs"], { cwd: "/work/mock" });
+    const mock = await ws.spawn(["sh", "-c", "exec node /work/mock/mock.mjs >>/work/mock/mock.log 2>&1"], { cwd: "/work/mock" });
     await waitForMock(ws);
 
     const harness = new AcpHarness({
@@ -89,7 +90,7 @@ test.runIf(run)("worker path on a real cluster: env, workspace, agent, sleep, wa
     await ws.wake();
     await environment.wake();
     for (const file of await environment.credentialsForWorkspace()) await ws.writeFile(file.path, file.content);
-    const mock2 = await ws.spawn(["node", "/work/mock/mock.mjs"], { cwd: "/work/mock" });
+    const mock2 = await ws.spawn(["sh", "-c", "exec node /work/mock/mock.mjs >>/work/mock/mock.log 2>&1"], { cwd: "/work/mock" });
     await waitForMock(ws);
 
     // The transcript must have survived the pod being deleted and recreated.
@@ -103,7 +104,7 @@ test.runIf(run)("worker path on a real cluster: env, workspace, agent, sleep, wa
     expect((await ws.exec(["cat", "round.txt"])).stdout).toBe("r1\nr2\n");
   } catch (error) {
     // Show what the model saw, so a failure in the pod can be read from the job log.
-    console.log("mock requests:\n" + (await ws.exec(["sh", "-c", "cat /work/mock/requests.log 2>&1; ls -la /work/home/.claude/projects/* 2>&1"])).stdout);
+    console.log("mock requests:\n" + (await ws.exec(["sh", "-c", "echo --- mock.log; cat /work/mock/mock.log 2>&1; echo --- requests.log; cat /work/mock/requests.log 2>&1; echo --- transcripts; ls -la /work/home/.claude/projects/* 2>&1; echo --- node; node -v; which claude-agent-acp"])).stdout);
     throw error;
   } finally {
     if (env.ITEST_KEEP !== "1") {
