@@ -45,6 +45,8 @@ export const EventData = {
   review_round_started: z.object({ comments: z.number().int() }),
   ci_completed: z.object({ headSha: z.string(), conclusion: z.string(), name: z.string() }),
   foreman_replied: z.object({ url: z.string().optional(), usage: Usage.optional() }),
+  /** Agent spend corrected to what the model gateway billed the task's key (gatewayUsd is its running total). */
+  cost_adjusted: z.object({ deltaUsd: z.number(), gatewayUsd: z.number() }),
   score_added: z.object({ score: Score }),
   outcome_added: z.object({ outcome: Outcome }),
   error: z.object({ message: z.string(), stage: z.string() }),
@@ -122,6 +124,8 @@ export function apply(record: TaskRecord, event: LedgerEvent): TaskRecord {
     }
     case "branch_set":
       return { ...r, branch: (d as EventDataOf<"branch_set">).branch };
+    case "cost_adjusted":
+      return { ...r, usage: addUsage(r.usage, { inputTokens: 0, outputTokens: 0, costUsd: (d as EventDataOf<"cost_adjusted">).deltaUsd }) };
     case "turn_finished":
       return { ...r, usage: addUsage(r.usage, (d as EventDataOf<"turn_finished">).usage) };
     case "foreman_replied": {
