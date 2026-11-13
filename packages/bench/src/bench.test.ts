@@ -157,8 +157,8 @@ describe("A vs B replay", () => {
       {
         tasks: [task],
         arms: [
-          { label: "A", factoryVersion: "fv_lazy", harness: harness("lazy", 0.1), workspace: ws, systemPrompt: "" },
-          { label: "B", factoryVersion: "fv_good", harness: harness("good", 0.3), workspace: ws, systemPrompt: "" },
+          { label: "A", factoryVersion: "fv_lazy", harness: harness("lazy", 0.1), workspace: ws, systemPrompt: "", env: {} },
+          { label: "B", factoryVersion: "fv_good", harness: harness("good", 0.3), workspace: ws, systemPrompt: "", env: {} },
         ],
         repeats: 4,
         maxCostUsd: 100,
@@ -181,7 +181,7 @@ describe("A vs B replay", () => {
     const { dir, base } = makeOrigin();
     const task = await captureBenchmarkTask("task_abc", { ledger: ledgerWith(mergedRecord()), prs: prSource(base), options, now: "n" });
     const ws = localWorkspace(dir);
-    const arm = (l: string) => ({ label: l, factoryVersion: l, harness: harness("good", 1), workspace: ws, systemPrompt: "" });
+    const arm = (l: string) => ({ label: l, factoryVersion: l, harness: harness("good", 1), workspace: ws, systemPrompt: "", env: {} });
     let n = 0;
     const out = await runAB({ tasks: [task], arms: [arm("A"), arm("B")], repeats: 10, maxCostUsd: 3, checkTimeoutMs: 10_000 }, async () => void n++);
     expect(out.stoppedForBudget).toBe(true);
@@ -207,7 +207,7 @@ describe("bench API", () => {
       prs: prSource(base),
       store: new FileBenchStore(root),
       captureOptions: options,
-      armFor: (s) => ({ label: s.label, factoryVersion: s.factoryVersion, harness: harness(s.model === "good" ? "good" : "lazy", 0.1), workspace: ws, systemPrompt: s.systemPrompt }),
+      armFor: (s) => ({ label: s.label, factoryVersion: s.factoryVersion, harness: harness(s.model === "good" ? "good" : "lazy", 0.1), workspace: ws, systemPrompt: s.systemPrompt, env: {} }),
       maxCostUsdPerRun: 5,
       now: () => new Date().toISOString(),
     });

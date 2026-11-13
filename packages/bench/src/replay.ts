@@ -8,6 +8,8 @@ export interface ReplayArm {
   harness: AgentHarness;
   workspace: Workspace;
   systemPrompt: string;
+  /** Environment for the agent process (model proxy URL, model name...). */
+  env: Record<string, string>;
 }
 
 const REPLAY_PREAMBLE =
@@ -55,7 +57,7 @@ export async function runAttempt(task: BenchmarkTask, arm: ReplayArm, attempt: n
     await must(ws, ["git", "checkout", "--quiet", "--force", task.startCommit], cwd);
     await must(ws, ["git", "clean", "-fdq"], cwd);
 
-    const session = await arm.harness.openSession({ workspace: ws, cwd, systemPrompt: `${arm.systemPrompt}\n\n${REPLAY_PREAMBLE}`, resumeSessionId: null });
+    const session = await arm.harness.openSession({ workspace: ws, cwd, systemPrompt: `${arm.systemPrompt}\n\n${REPLAY_PREAMBLE}`, resumeSessionId: null, env: arm.env });
     let turnNote = "";
     try {
       const turn = await session.prompt(task.ask, () => undefined);
