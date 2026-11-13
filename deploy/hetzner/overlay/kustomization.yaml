@@ -10,7 +10,7 @@ resources:
 images:
   - name: ghcr.io/nisarahamedk/openfactory
     newName: openfactory
-    newTag: 162ff37
+    newTag: 10be077
 patches:
   - target: { kind: Ingress, name: factory }
     patch: |-
@@ -28,3 +28,11 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: { name: FACTORY_DOMAIN, value: "178.105.22.96.sslip.io" }
+      # Per-task LiteLLM keys: the server mints a capped key per task with the master key;
+      # sandboxes only ever see their own task key.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: LITELLM_ADMIN_URL, value: "http://litellm.factory.svc:4000" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: LITELLM_MASTER_KEY, valueFrom: { secretKeyRef: { name: litellm, key: LITELLM_MASTER_KEY } } }
