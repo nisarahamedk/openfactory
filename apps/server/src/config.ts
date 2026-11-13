@@ -40,6 +40,8 @@ const Env = z.object({
   DXFAKE_TOKEN: z.string().optional(),
   BENCH_DIR: z.string().optional(),
   BENCH_MAX_USD_PER_RUN: z.coerce.number().default(5),
+  /** How the repo runs a chosen set of test files (packages/bench CheckSpec, JSON). Unset = vitest with file args. */
+  BENCH_CHECK_JSON: z.string().optional(),
 });
 export type Config = z.infer<typeof Env> & { repos: RepoRef[]; agentEnv: Record<string, string> };
 

@@ -5,7 +5,7 @@
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource } from "@openfactory/bench";
+import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
 import { GitHubChat, GitHubClient, GitHubCodeHost, GitHubPollingSource, parseWebhook } from "@openfactory/code-github";
 import type { AgentHarness, MetricsSink, Signal } from "@openfactory/contracts";
 import { FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
@@ -99,7 +99,7 @@ async function main() {
         ledger,
         prs: new GitHubPullRequestSource(async () => cfg.GITHUB_TOKEN),
         store: new FileBenchStore(cfg.BENCH_DIR),
-        captureOptions: defaultCaptureOptions,
+        captureOptions: cfg.BENCH_CHECK_JSON ? captureOptionsFrom(parseCheckSpec(cfg.BENCH_CHECK_JSON)) : defaultCaptureOptions,
         armFor: (spec) => ({
           label: spec.label,
           factoryVersion: spec.factoryVersion,

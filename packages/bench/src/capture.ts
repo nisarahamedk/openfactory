@@ -135,3 +135,49 @@ export class GitHubPullRequestSource implements PullRequestSource {
     return { baseSha: pull.base.sha, mergeSha, files };
   }
 }
+
+// ─────────────────────────── configurable check ───────────────────────────
+
+/**
+ * How a repo runs a chosen set of test files, as plain config (e.g. from an env var).
+ *  - "append-files": the runner takes file arguments (`vitest run a.test.ts b.test.ts`).
+ *  - "delete-others": the runner has no file filter and runs every `<testDir>/*<testSuffix>`,
+ *    so the check deletes the other top-level test files in the (throwaway) replay
+ *    workspace first, then runs it.
+ */
+export const CheckSpec = z.object({
+  testFilePattern: z.string().min(1),
+  run: z.array(z.string()).min(1),
+  filter: z.enum(["append-files", "delete-others"]),
+  testDir: z.string().default("tests"),
+  testSuffix: z.string().default(".test.ts"),
+  fallbackRun: z.array(z.string()).nullable().default(null),
+});
+export type CheckSpec = z.infer<typeof CheckSpec>;
+
+/** Parse a CheckSpec from JSON text (an env var); throws with the Zod issues on bad config. */
+export function parseCheckSpec(json: string): CheckSpec {
+  return CheckSpec.parse(JSON.parse(json));
+}
+
+function sh(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Build capture options from a CheckSpec. */
+export function captureOptionsFrom(spec: CheckSpec): CaptureOptions {
+  const pattern = new RegExp(spec.testFilePattern);
+  return {
+    isTestFile: (p) => pattern.test(p),
+    fallbackCheckCommand: spec.fallbackRun,
+    checkCommand: (files) => {
+      if (spec.filter === "append-files") return [...spec.run, ...files];
+      const dirPrefix = `${spec.testDir.replace(/\/$/, "")}/`;
+      const keep = files.filter((f) => f.startsWith(dirPrefix)).map((f) => f.slice(dirPrefix.length));
+      const script =
+        `cd ${sh(spec.testDir)} && for f in *${sh(spec.testSuffix)}; do case " ${keep.map((k) => k.replace(/[^A-Za-z0-9._-]/g, "")).join(" ")} " in ` +
+        `*" $f "*) ;; *) rm -f -- "$f" ;; esac; done && cd - >/dev/null && exec "$@"`;
+      return ["bash", "-c", script, "bench-check", ...spec.run];
+    },
+  };
+}

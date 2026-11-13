@@ -238,3 +238,22 @@ describe("bench API", () => {
     expect(existsSync(join(root, "runs", `${run.id}.json`))).toBe(true);
   });
 });
+
+describe("check spec", () => {
+  it("delete-others keeps only the hidden tests, then runs the repo's own runner", async () => {
+    const { captureOptionsFrom, parseCheckSpec } = await import("./index.js");
+    const dir = mkdtempSync(join(tmpdir(), "bench-spec-"));
+    mkdirSync(join(dir, "tests/e2e"), { recursive: true });
+    for (const f of ["a.test.ts", "b.test.ts", "c.test.ts"]) writeFileSync(join(dir, "tests", f), "");
+    writeFileSync(join(dir, "tests/e2e/x.spec.ts"), "");
+    const opts = captureOptionsFrom(
+      parseCheckSpec(JSON.stringify({ testFilePattern: "^tests/[^/]+\\.test\\.ts$", run: ["ls", "tests"], filter: "delete-others" })),
+    );
+    expect(opts.isTestFile("tests/a.test.ts")).toBe(true);
+    expect(opts.isTestFile("tests/e2e/x.spec.ts")).toBe(false);
+    const [bin = "", ...args] = opts.checkCommand(["tests/a.test.ts", "tests/c.test.ts"]);
+    const r = spawnSync(bin, args, { cwd: dir, encoding: "utf8" });
+    expect(r.status).toBe(0);
+    expect(r.stdout.split("\n").filter(Boolean).sort()).toEqual(["a.test.ts", "c.test.ts", "e2e"]);
+  });
+});
