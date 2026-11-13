@@ -145,7 +145,10 @@ export class DevspaceEnvironment implements Environment {
   async get(name: string): Promise<EnvironmentHandle | null> {
     try {
       const ns = await this.core.readNamespace({ name });
-      return this.handle(name, ns.metadata?.labels?.["openfactory.dev/task"] ?? name);
+      // Only namespaces this environment made, and not one already being deleted.
+      const task = ns.metadata?.labels?.["openfactory.dev/task"];
+      if (task === undefined || ns.metadata?.deletionTimestamp !== undefined) return null;
+      return this.handle(name, task);
     } catch (error) {
       if (statusCode(error) === 404) return null;
       throw error;
@@ -355,3 +358,4 @@ function parseList(value: string | undefined): string[] {
 export const createDevspaceEnvironment = (options: DevspaceEnvironmentOptions): DevspaceEnvironment =>
   new DevspaceEnvironment(options);
 export { renderSkill } from "./skill.js";
+export { provider } from "./provider.js";

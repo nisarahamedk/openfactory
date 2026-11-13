@@ -124,3 +124,4 @@ export function fromEnv(env: Env): LiteLlmGateway {
 }
 
 export const createLiteLlmGateway = (options: LiteLlmGatewayOptions): LiteLlmGateway => new LiteLlmGateway(options);
+export { provider } from "./provider.js";

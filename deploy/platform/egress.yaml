@@ -5,7 +5,7 @@
 # every request, allowed or denied. The collector sidecar aggregates that log per task,
 # host and minute and posts it to the factory server's POST /v1/egress.
 #
-# Workspace pods get HTTPS_PROXY/HTTP_PROXY/NO_PROXY through WORKSPACE_POD_ENV on the server.
+# Workspace pods get HTTPS_PROXY/HTTP_PROXY/NO_PROXY through WORKSPACE_EGRESS_PROXY and WORKSPACE_NO_PROXY on the server.
 apiVersion: v1
 kind: Namespace
 metadata:

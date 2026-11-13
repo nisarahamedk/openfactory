@@ -8,9 +8,14 @@
  *                workspace resumes the same agent session.
  *
  * The clone happens in an init container that reads a GitHub token from a
- * short-lived Secret; the agent's container never holds a GitHub credential
- * (the origin URL has none, and nothing is written to $HOME). Pushes go
- * through the factory, not the sandbox.
+ * short-lived Secret, so the origin URL holds no credential. The task job
+ * writes the agent's own per-task repo token to $HOME before each turn; the
+ * agent pushes and opens its PR itself.
+ *
+ * With an egress proxy, both containers send all traffic through it (the
+ * HTTP(S)_PROXY variables), and the pod's `openfactory.dev/task` label lets
+ * the proxy's collector attribute requests to the task. NetworkPolicy, not
+ * this plugin, blocks every other route out.
  *
  * Sleep deletes the pod and keeps the volume; wake makes the pod again.
  * Commands run through the Kubernetes exec API, so the factory needs no
@@ -38,8 +43,12 @@ export interface K8sWorkspaceOptions {
   runtimeClassName: string | null;
   /** How long to wait for a pod to start. */
   startTimeoutMs: number;
-  /** Extra env for every container in the pod (clone and agent), e.g. the egress proxy settings. */
-  podEnv?: Record<string, string>;
+  /**
+   * Egress proxy every request leaves through, e.g. "http://egress.factory.svc:3128";
+   * null sets no proxy. `noProxy` lists hosts reached directly, and `allow` is the
+   * factory's allowlist, passed to the pod (annotation and env) for the proxy and the agent.
+   */
+  egress?: { proxy: string | null; noProxy: string; allow: string[] };
 }
 
 const WORK = "/work";
@@ -112,7 +121,9 @@ export class K8sWorkspace implements Workspace {
   async get(id: string): Promise<WorkspaceHandle | null> {
     try {
       const claim = await this.core.readNamespacedPersistentVolumeClaim({ name: id, namespace: this.options.namespace });
-      const taskId = claim.metadata?.labels?.["openfactory.dev/task"] ?? id;
+      // Only claims this workspace made, and not one already being deleted.
+      const taskId = claim.metadata?.labels?.["openfactory.dev/task"];
+      if (taskId === undefined || claim.metadata?.deletionTimestamp !== undefined) return null;
       const image = claim.metadata?.annotations?.["openfactory.dev/image"] ?? this.options.image;
       return this.handle(id, image, taskId);
     } catch (error) {
@@ -324,6 +335,16 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
     } catch (error) {
       if (!isNotFound(error)) throw error;
     }
+    // The claim lingers until its volume is released; destroy returns once it is gone.
+    await this.waitFor(async () => {
+      try {
+        await this.core.readNamespacedPersistentVolumeClaim({ name: this.id, namespace: this.options.namespace });
+        return false;
+      } catch (error) {
+        if (isNotFound(error)) return true;
+        throw error;
+      }
+    }, "deleted");
   }
 
   /** Runs `cmd` in `cwd` with extra env, and a time limit when given. */
@@ -333,16 +354,15 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
     return ["env", "-C", cwd ?? REPO, ...vars, ...limit, ...cmd];
   }
 
-  private podEnv(): k8s.V1EnvVar[] {
-    return Object.entries(this.options.podEnv ?? {}).map(([name, value]) => ({ name, value }));
-  }
-
   private podSpec(): k8s.V1Pod {
     const { resources } = this.options;
+    const egress = this.options.egress ?? { proxy: null, noProxy: "", allow: [] };
+    const proxyEnv = proxyVars(egress);
     return {
       metadata: {
         name: this.id,
         labels: { "openfactory.dev/task": this.taskId, "app.kubernetes.io/managed-by": "openfactory", "app.kubernetes.io/component": "workspace" },
+        ...(egress.allow.length === 0 ? {} : { annotations: { "openfactory.dev/egress-allow": egress.allow.join(",") } }),
       },
       spec: {
         restartPolicy: "Always",
@@ -359,10 +379,10 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
             workingDir: WORK,
             env: [
               { name: "HOME", value: "/tmp" }, // nothing the clone writes to $HOME lands on the volume
+              ...proxyEnv,
               { name: "REPO_URL", value: this.clone?.repoUrl ?? "" },
               { name: "TASK_BRANCH", value: this.clone?.branch ?? "" },
               { name: "START_REF", value: this.clone?.startRef ?? "" },
-              ...this.podEnv(),
               ...(this.clone === null
                 ? []
                 : [{ name: "GITHUB_TOKEN", valueFrom: { secretKeyRef: { name: this.clone.tokenSecret, key: "GITHUB_TOKEN", optional: true } } }]),
@@ -385,7 +405,7 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
               { name: "HOME", value: HOME },
               { name: "CLAUDE_CONFIG_DIR", value: `${HOME}/.claude` },
               { name: "OPENFACTORY_TASK", value: this.taskId },
-              ...this.podEnv(),
+              ...proxyEnv,
             ],
             readinessProbe: { exec: { command: ["test", "-f", `${HOME}/.ready`] }, periodSeconds: 1 },
             resources: {
@@ -421,6 +441,19 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
     }
     throw new WorkspaceStartTimeout(this.id, `not ${what}`);
   }
+}
+
+/** Proxy variables in both spellings: curl and git read lowercase http_proxy, most tools the uppercase ones. */
+function proxyVars(egress: { proxy: string | null; noProxy: string; allow: string[] }): k8s.V1EnvVar[] {
+  const vars: k8s.V1EnvVar[] = [];
+  if (egress.proxy !== null) {
+    for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) vars.push({ name, value: egress.proxy });
+    for (const name of ["NO_PROXY", "no_proxy"]) vars.push({ name, value: egress.noProxy });
+    // Node's own fetch and http honour the proxy variables only with this (Node 22.21+, 24.5+).
+    vars.push({ name: "NODE_USE_ENV_PROXY", value: "1" });
+  }
+  if (egress.allow.length > 0) vars.push({ name: "FACTORY_EGRESS_ALLOW", value: egress.allow.join(",") });
+  return vars;
 }
 
 function exitCodeOf(status: k8s.V1Status): number {
@@ -472,26 +505,13 @@ export function fromEnv(env: Env): K8sWorkspace {
     },
     runtimeClassName: env.WORKSPACE_RUNTIME_CLASS ?? null,
     startTimeoutMs: Number(env.WORKSPACE_START_TIMEOUT_MS ?? "300000"),
-    podEnv: parsePodEnv(env.WORKSPACE_POD_ENV),
+    egress: {
+      proxy: env.WORKSPACE_EGRESS_PROXY === undefined || env.WORKSPACE_EGRESS_PROXY === "" ? null : env.WORKSPACE_EGRESS_PROXY,
+      noProxy: env.WORKSPACE_NO_PROXY ?? "localhost,127.0.0.1,::1",
+      allow: (env.WORKSPACE_EGRESS_ALLOW ?? "").split(",").map((h) => h.trim()).filter((h) => h !== ""),
+    },
   });
 }
 
 export const createK8sWorkspace = (options: K8sWorkspaceOptions): K8sWorkspace => new K8sWorkspace(options);
-
-/**
- * WORKSPACE_POD_ENV is a JSON object of extra env vars for the workspace pod's containers, e.g.
- * {"HTTPS_PROXY":"http://egress-proxy.factory-egress.svc:3128","NO_PROXY":".svc,.cluster.local"}.
- */
-function parsePodEnv(raw: string | undefined): Record<string, string> {
-  if (raw === undefined || raw.trim() === "") return {};
-  const parsed: unknown = JSON.parse(raw);
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("WORKSPACE_POD_ENV must be a JSON object of string values");
-  }
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(parsed)) {
-    if (typeof v !== "string") throw new Error(`WORKSPACE_POD_ENV.${k} must be a string`);
-    out[k] = v;
-  }
-  return out;
-}
+export { provider } from "./provider.js";

@@ -63,7 +63,7 @@ function required(env: Env, key: string): string {
  * Only Claude Code is wired today; other ACP agents (Codex, Copilot CLI) use
  * AcpHarness directly with their own command and env.
  */
-export function fromEnv(env: Env): AcpHarness {
+export function fromEnv(env: Env, log?: (line: string) => void): AcpHarness {
   const agent = env.ACP_AGENT ?? "claude-code";
   if (agent !== "claude-code") throw new Error(`agent-acp: unknown ACP_AGENT "${agent}" (known: claude-code)`);
   const command = env.ACP_AGENT_COMMAND;
@@ -74,7 +74,9 @@ export function fromEnv(env: Env): AcpHarness {
     configDir: env.ACP_CONFIG_DIR ?? null,
     ...(command === undefined || command === "" ? {} : { command: command.split(" ") }),
     log: (line) => {
-      if (env.ACP_DEBUG === "1") process.stderr.write(`[agent-acp] ${line}\n`);
+      if (env.ACP_DEBUG !== "1") return;
+      if (log !== undefined) log(line);
+      else process.stderr.write(`[agent-acp] ${line}\n`);
     },
   });
 }

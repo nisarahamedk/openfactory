@@ -49,7 +49,8 @@ export class LocalWorkspace implements Workspace {
     await handle.mustExec(
       branchExists.exitCode === 0 ? ["git", "checkout", input.branch] : ["git", "checkout", "-B", input.branch],
       { cwd: repoPath },
-    );    return handle;
+    );
+    return handle;
   }
 
   async get(id: string): Promise<WorkspaceHandle | null> {
@@ -95,8 +96,13 @@ class LocalWorkspaceHandle implements WorkspaceHandle {
     let stderr = "";
     child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
     child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      child.on("error", reject);
+    const exitCode = await new Promise<number>((resolve) => {
+      // A command that cannot start (not found, not executable) is a failed
+      // command, like a shell's 127, not a broken workspace.
+      child.on("error", (err) => {
+        stderr += String(err);
+        resolve(127);
+      });
       child.on("close", (code) => resolve(code ?? 1));
     });
     return { exitCode, stdout, stderr };
@@ -197,3 +203,4 @@ export function fromEnv(env: Env): LocalWorkspace {
 }
 
 export const createLocalWorkspace = (options: LocalWorkspaceOptions): LocalWorkspace => new LocalWorkspace(options);
+export { provider } from "./provider.js";

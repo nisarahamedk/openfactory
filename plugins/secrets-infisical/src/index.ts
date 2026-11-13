@@ -112,3 +112,4 @@ export function fromEnv(env: Env): InfisicalSecrets {
 }
 
 export const createInfisicalSecrets = (options: InfisicalSecretsOptions): InfisicalSecrets => new InfisicalSecrets(options);
+export { provider } from "./provider.js";

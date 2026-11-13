@@ -59,3 +59,4 @@ export function fromEnv(env: Env): K8sSecrets {
 }
 
 export const createK8sSecrets = (options: K8sSecretsOptions): K8sSecrets => new K8sSecrets(options);
+export { provider } from "./provider.js";

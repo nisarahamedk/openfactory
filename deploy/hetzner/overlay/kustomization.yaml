@@ -10,7 +10,7 @@ resources:
 images:
   - name: ghcr.io/nisarahamedk/openfactory
     newName: openfactory
-    newTag: bb6c106
+    newTag: dc98b98
 patches:
   - target: { kind: Ingress, name: factory }
     patch: |-
@@ -28,6 +28,22 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: { name: FACTORY_DOMAIN, value: "178.105.22.96.sslip.io" }
+      # Workspaces and DevSpace task environments.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: WORKSPACE_NAMESPACE, value: "factory-workspaces" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: ENV_APP_URL_TEMPLATE, value: "https://{namespace}.178.105.22.96.sslip.io" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: ENV_COPY_SECRETS, value: "factory/firstword-dev" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: ENV_AGENT_VARS, value: "FACTORY_DOMAIN=178.105.22.96.sslip.io" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: ENV_DEPLOY_COMMAND, value: "devspace dev --namespace {namespace}" }
       # Per-task LiteLLM keys: the server mints a capped key per task with the master key;
       # sandboxes only ever see their own task key.
       - op: add
@@ -36,9 +52,14 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: { name: LITELLM_MASTER_KEY, valueFrom: { secretKeyRef: { name: litellm, key: LITELLM_MASTER_KEY } } }
-      # Sandboxes reach the internet only through the egress proxy (deploy/platform/egress.yaml).
+      # Sandboxes reach the internet only through the egress proxy (deploy/platform/egress.yaml);
+      # in-cluster routes (kubectl/devspace, LiteLLM) go direct and NetworkPolicy allows them.
       - op: add
         path: /spec/template/spec/containers/0/env/-
-        value:
-          name: WORKSPACE_POD_ENV
-          value: '{"HTTPS_PROXY":"http://egress-proxy.factory-egress.svc:3128","HTTP_PROXY":"http://egress-proxy.factory-egress.svc:3128","https_proxy":"http://egress-proxy.factory-egress.svc:3128","http_proxy":"http://egress-proxy.factory-egress.svc:3128","NO_PROXY":"localhost,127.0.0.1,.svc,.cluster.local,10.43.0.0/16,10.42.0.0/16","no_proxy":"localhost,127.0.0.1,.svc,.cluster.local,10.43.0.0/16,10.42.0.0/16"}'
+        value: { name: WORKSPACE_EGRESS_PROXY, value: "http://egress-proxy.factory-egress.svc:3128" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: WORKSPACE_NO_PROXY, value: "localhost,127.0.0.1,::1,.svc,.cluster.local,10.43.0.0/16" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: TASK_KEY_MODELS, value: "claude-sonnet,claude-haiku" }
