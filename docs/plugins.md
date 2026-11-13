@@ -41,7 +41,7 @@ Status: **Decided** by Nisar on 2026-11-13. Migration steps 1 and 3 are done (re
 | ModelGateway | model access, keys, budget per task | OpenAI- / Anthropic-compatible HTTP | LiteLLM, Bedrock, Portkey | wired in directly |
 | Secrets | short-lived credentials per task | OIDC workload identity where possible | Infisical, Vault, cloud secret managers | missing |
 | EvidenceStore | screenshots, videos, logs, transcripts | **S3 API** | disk, S3, R2, MinIO | internal |
-| Telemetry | traces, metrics and logs out | **OpenTelemetry** (GenAI conventions) | any OTLP backend: Datadog, Grafana, Honeycomb, Langfuse | missing |
+| Telemetry | traces, metrics and logs out | **OpenTelemetry** (GenAI conventions) | any OTLP backend: Datadog, Grafana, Honeycomb, Langfuse | `telemetry-otlp` (task, phases, turns; tool-call and model-call spans not yet), enabled by `OTEL_EXPORTER_OTLP_ENDPOINT` |
 | Scorer | grade one task record | (none) | facts, LLM judge, world checks | `Scorer` |
 | Metrics | rows to org dashboards | CDEvents (check adoption first) | DX, DevLake | `MetricsSink` |
 | OutcomeSource | outcomes after the merge | webhooks | Rootly, PagerDuty, Datadog monitors, reverts | half (fake DX incidents) |

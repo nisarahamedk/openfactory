@@ -14,6 +14,7 @@ import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
 import { promptTemplates, TaskJobs } from "@openfactory/task-job";
 import { fileEvidenceStore, createApp } from "./app.js";
+import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
 import { loadSelections, ProviderRegistry } from "./registry.js";
 
@@ -66,6 +67,9 @@ async function main() {
   };
   const chat = need(p.chat, "chat");
   const sinks: MetricsSink[] = p.metrics ? [p.metrics] : [];
+  // OpenTelemetry: each task as a trace, when OTEL_EXPORTER_OTLP_ENDPOINT is set (standard OTel env vars).
+  const otlp = otlpFromEnv(process.env, (id) => ledger.events(id));
+  if (otlp) sinks.push(otlp);
   const evidence = fileEvidenceStore(join(cfg.DATA_DIR, "evidence"), cfg.PUBLIC_URL);
 
   const jobs = new TaskJobs(
