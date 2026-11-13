@@ -37,6 +37,16 @@ startMockAnthropic([
 `;
 }
 
+/** Waits until the mock model answers inside the pod. */
+async function waitForMock(ws: { exec(cmd: string[]): Promise<{ exitCode: number }> }): Promise<void> {
+  for (let i = 0; i < 60; i++) {
+    const probe = await ws.exec(["curl", "-fsS", "-o", "/dev/null", "-X", "POST", "http://127.0.0.1:18080/v1/messages/count_tokens", "-d", "{}"]);
+    if (probe.exitCode === 0) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("The mock model did not start in the workspace pod");
+}
+
 test.runIf(run)("worker path on a real cluster: env, workspace, agent, sleep, wake, resume", { timeout: 900_000 }, async () => {
   const env = process.env;
   const environments = envFromEnv({ ...env, ENV_APP_URL_TEMPLATE: env.ENV_APP_URL_TEMPLATE ?? "http://{namespace}.invalid" });
@@ -52,7 +62,7 @@ test.runIf(run)("worker path on a real cluster: env, workspace, agent, sleep, wa
 
     await ws.writeFile("/work/mock/mock.mjs", mockRunner());
     const mock = await ws.spawn(["node", "/work/mock/mock.mjs"], { cwd: "/work/mock" });
-    await new Promise((r) => setTimeout(r, 1500));
+    await waitForMock(ws);
 
     const harness = new AcpHarness({
       name: "claude-code",
@@ -80,7 +90,7 @@ test.runIf(run)("worker path on a real cluster: env, workspace, agent, sleep, wa
     await environment.wake();
     for (const file of await environment.credentialsForWorkspace()) await ws.writeFile(file.path, file.content);
     const mock2 = await ws.spawn(["node", "/work/mock/mock.mjs"], { cwd: "/work/mock" });
-    await new Promise((r) => setTimeout(r, 1500));
+    await waitForMock(ws);
 
     // The transcript must have survived the pod being deleted and recreated.
     const transcript = await ws.exec(["sh", "-c", `ls /work/home/.claude/projects/*/${sessionId}.jsonl`]);
