@@ -2,7 +2,8 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { Hono, type Context } from "hono";
 import { basicAuth } from "hono/basic-auth";
-import { getCookie, setCookie } from "hono/cookie";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { ROLE_RANK, type Auth, type Role, type Session } from "./auth.js";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import { factoryFor, TaskId, teamFor, ViewShare, type LedgerEvent, type SavedView, type Team, type TaskRecord } from "@openfactory/contracts";
@@ -23,6 +24,7 @@ import {
   ScopeBar,
   scopeOptions,
   ScorersInScope,
+  ProviderSigninPage,
   SigninPage,
   TasksPage,
   TeamPage,
@@ -78,6 +80,18 @@ function cached<T>(load: () => Promise<T>, fallback: T, ttlMs = 60_000) {
 }
 
 const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const SESSION_COOKIE = "of_session";
+const STATE_COOKIE = "of_auth";
+const pathAndQuery = (c: Context) => {
+  const u = new URL(c.req.url);
+  return `${u.pathname}${u.search}`;
+};
+/** The least role each form post needs. Viewers save views; engineers work tasks; admins change factories and spend. */
+function roleFor(path: string): Role {
+  if (path === "/signout" || path === "/views" || /^\/views\/[^/]+\/delete$/.test(path)) return "viewer";
+  if (/^\/factories\/[^/]+\/rollout$/.test(path) || path === "/bench/runs") return "admin";
+  return "engineer";
+}
 const msg = (path: string, m: string) => `${path}${path.includes("?") ? "&" : "?"}msg=${encodeURIComponent(m)}`;
 /** Only same-app paths are followed after a form post. */
 const safePath = (p: unknown, fallback = "/") => (typeof p === "string" && p.startsWith("/") && !p.startsWith("//") ? p : fallback);
@@ -90,8 +104,9 @@ const safePath = (p: unknown, fallback = "/") => (typeof p === "string" && p.sta
  */
 export function createDashboard(
   api: FactoryApi,
-  opts: { password: string | null; models: [string, string]; now?: () => string; factoryName?: string; mcpUrl?: string | null },
+  opts: { password: string | null; models: [string, string]; now?: () => string; factoryName?: string; mcpUrl?: string | null; auth?: Auth | null },
 ): Hono {
+  const auth = opts.auth ?? null;
   const app = new Hono();
   const cache = new EventCache(api);
   const now = opts.now ?? (() => new Date().toISOString());
@@ -116,7 +131,10 @@ export function createDashboard(
     return f;
   };
   const name = opts.factoryName ?? "main";
+  /** Who is using the app: the signed-in person with a provider, else the name picked on /signin (dev fallback). */
+  const sessionOf = (c: Context): Session | null => (auth ? auth.session(getCookie(c, SESSION_COOKIE)) : null);
   const viewerOf = (c: Context) => {
+    if (auth) return sessionOf(c)?.login ?? null;
     const v = getCookie(c, "of_user");
     return v && LOGIN.test(v) ? v : null;
   };
@@ -161,7 +179,26 @@ export function createDashboard(
     font ??= await readFile(fontPath);
     return c.body(new Uint8Array(font), 200, { "content-type": "font/woff2", "cache-control": "public, max-age=31536000, immutable" });
   });
-  if (opts.password !== null) app.use("*", basicAuth({ username: "factory", password: opts.password }));
+  if (auth) {
+    // Signed-in only: everything but sign-in itself, health and the font needs a session.
+    app.use("*", async (c, next) => {
+      const path = c.req.path;
+      if (path === "/signin" || path.startsWith("/auth/") || path === "/healthz" || path.startsWith("/assets/")) return next();
+      const s = sessionOf(c);
+      if (!s) {
+        if (c.req.method === "GET") return c.redirect(`/signin?back=${encodeURIComponent(pathAndQuery(c))}`, 303);
+        return c.text("Sign in first.", 401);
+      }
+      if (c.req.method === "POST") {
+        // Forms only from this app (the session cookie is SameSite=Lax too).
+        const origin = c.req.header("origin");
+        if (origin && origin !== auth.origin) return c.text("Cross-site request refused.", 403);
+        const need = roleFor(path);
+        if (ROLE_RANK[s.role] < ROLE_RANK[need]) return c.redirect(msg(safePath(c.req.header("referer") ? new URL(c.req.header("referer")!).pathname : "/"), `That needs the ${need} role; you are ${s.role === "viewer" ? "a viewer" : `an ${s.role}`}. Ask a factory admin.`), 303);
+      }
+      return next();
+    });
+  } else if (opts.password !== null) app.use("*", basicAuth({ username: "factory", password: opts.password }));
 
   app.onError(async (err, c) => {
     if (err instanceof HTTPException) return err.getResponse();
@@ -172,10 +209,39 @@ export function createDashboard(
 
   // ── identity ──
   app.get("/signin", async (c) => {
+    if (auth) {
+      const back = safePath(c.req.query("back"));
+      if (sessionOf(c)) return c.redirect(back, 303);
+      return c.html(<Shell title="Sign in" nav="none" flash={c.req.query("msg") ?? null} factory={{ name, version: "" }} viewer={null}><ProviderSigninPage provider={auth.cfg.provider} back={back} /></Shell>);
+    }
     const [{ facts }, teams] = await Promise.all([loadAll(), teamsOf()]);
     return c.html(await page(c, { title: "Sign in", nav: "none" }, <SigninPage people={people(facts, teams, { kind: "org" })} viewer={viewerOf(c)} back={safePath(c.req.query("back"))} />));
   });
+  app.get("/auth/start", async (c) => {
+    if (!auth) return c.notFound();
+    const { url, state } = await auth.start(safePath(c.req.query("back")));
+    setCookie(c, STATE_COOKIE, state, { path: "/auth", httpOnly: true, secure: auth.origin.startsWith("https:"), sameSite: "Lax", maxAge: 600 });
+    return c.redirect(url, 302);
+  });
+  app.get("/auth/callback", async (c) => {
+    if (!auth) return c.notFound();
+    try {
+      const { session, back } = await auth.finish({ code: c.req.query("code"), state: c.req.query("state"), cookie: getCookie(c, STATE_COOKIE) });
+      deleteCookie(c, STATE_COOKIE, { path: "/auth" });
+      setCookie(c, SESSION_COOKIE, auth.sign(session), { path: "/", httpOnly: true, secure: auth.origin.startsWith("https:"), sameSite: "Lax", maxAge: Math.floor((session.exp - Date.now()) / 1000) });
+      return c.redirect(safePath(back), 303);
+    } catch (e) {
+      return c.redirect(msg("/signin", e instanceof Error ? e.message : "Sign-in failed."), 303);
+    }
+  });
+  app.post("/signout", (c) => {
+    deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    deleteCookie(c, "of_user", { path: "/" });
+    return c.redirect("/signin", 303);
+  });
+
   app.post("/signin", async (c) => {
+    if (auth) return c.redirect("/signin", 303);
     const form = await c.req.parseBody();
     const login = typeof form.login === "string" ? form.login.trim() : "";
     if (!LOGIN.test(login)) return c.redirect(msg("/signin", "That doesn't look like a login."), 303);

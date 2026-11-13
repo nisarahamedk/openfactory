@@ -72,6 +72,18 @@ server:
 dashboard:
   enabled: true
   models: [claude-haiku, claude-sonnet]
+  # Sign-in (recommended). Off: the shared generated password and a name picker (dev only).
+  # The Secret holds AUTH_CLIENT_ID, AUTH_CLIENT_SECRET and SESSION_SECRET (32+ random characters).
+  auth:
+    provider: none        # github | oidc | none
+    secret: ""            # Secret name with the keys above
+    publicUrl: ""         # the app's public URL; register <publicUrl>/auth/callback with the provider
+    admins: []            # logins that may change rollouts and start paid benchmark runs
+    viewers: []           # logins that may only read
+    defaultRole: engineer # everyone else who can sign in
+    githubOrg: ""         # github: only this org's members may sign in
+    oidcIssuer: ""        # oidc: e.g. https://acme.okta.com
+    oidcLoginClaim: preferred_username
   resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 256Mi } }
 
 persistence:
