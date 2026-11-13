@@ -21,6 +21,18 @@ importers:
         specifier: 3.2.4
         version: 3.2.4(@types/node@22.18.0)
 
+  packages/bench:
+    dependencies:
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      hono:
+        specifier: 4.10.4
+        version: 4.10.4
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
+
   packages/contracts:
     dependencies:
       zod:
