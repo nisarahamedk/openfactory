@@ -151,7 +151,7 @@ describe("task job", () => {
         agent: w.agent,
         workspace: w.workspace,
         environment: w.environment,
-        modelKeys: { forTask: async (t: string) => ({ ANTHROPIC_API_KEY: `key-${t}` }), revoke: async () => {} },
+        modelKeys: { forTask: async (t: string) => ({ ANTHROPIC_API_KEY: `key-${t}` }), revoke: async () => {}, spend: async () => 0.5 * w.prompts.length },
         evidence: { put: async (t, name) => ({ url: `https://factory/evidence/${t}/${name}` }) },
         scorers: factScorers,
         sinks: [w.sink],
@@ -217,7 +217,7 @@ describe("task job", () => {
     r = (await ledger.getTask(taskId))!;
     expect(r.status).toBe("merged");
     expect(r.outcomes.map((o) => o.kind)).toEqual(["merged"]);
-    expect(r.usage.costUsd).toBeGreaterThanOrEqual(1);
+    expect(r.usage.costUsd).toBe(1); // billed by the gateway: 0.5 per turn, two turns
     expect(r.scores.some((s) => s.scorer.includes("merged"))).toBe(true);
     expect(w.sunk.at(-1)?.status).toBe("merged");
     expect(w.life).toContain("ws.destroy");

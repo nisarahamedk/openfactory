@@ -45,8 +45,11 @@ const InitializeResult = z.object({
 
 const NewSessionResult = z.object({ sessionId: z.string() }).passthrough();
 
+const Count = z.number().nonnegative().catch(0).default(0);
 const PromptResult = z.object({
   stopReason: z.enum(["end_turn", "max_tokens", "max_turn_requests", "refusal", "cancelled"]),
+  /** ACP prompt usage (the turn's tokens); cache reads and writes count as input. */
+  usage: z.object({ inputTokens: Count, outputTokens: Count, cachedReadTokens: Count, cachedWriteTokens: Count }).nullish(),
 });
 
 const PermissionRequest = z.object({
@@ -180,7 +183,12 @@ class AcpSession implements AgentSession {
       return {
         stopReason: result.stopReason === "max_turn_requests" ? "max_tokens" : result.stopReason,
         summary: turn.text.join(""),
-        usage: { inputTokens: 0, outputTokens: 0, costUsd: turn.costUsd },
+        usage: {
+          inputTokens: result.usage ? result.usage.inputTokens + result.usage.cachedReadTokens + result.usage.cachedWriteTokens : 0,
+          outputTokens: result.usage?.outputTokens ?? 0,
+          // The agent's own estimate; the task job replaces it with the model gateway's spend when it has one.
+          costUsd: turn.costUsd,
+        },
       };
     } finally {
       this.turn = null;
