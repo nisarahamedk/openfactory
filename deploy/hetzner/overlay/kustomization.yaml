@@ -63,3 +63,19 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: { name: TASK_KEY_MODELS, value: "claude-sonnet,claude-haiku" }
+      # Token for the workspace's clone init container only (stored per task as <ws>-git; the agent container never mounts it).
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: WORKSPACE_GIT_TOKEN, valueFrom: { secretKeyRef: { name: github, key: GITHUB_TOKEN } } }
+  # LiteLLM serves both /chat/completions and /v1/messages at its root; with a /v1 base the agent's
+  # Anthropic client called /v1/v1/messages (404).
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: openfactory, namespace: factory }
+      spec:
+        template:
+          spec:
+            containers:
+              - name: server
+                env: [{ name: MODEL_PROXY_URL, value: "http://litellm.factory.svc:4000" }]
