@@ -8,7 +8,8 @@ import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
 import { GitHubClient, parseWebhook } from "@openfactory/github";
-import type { AgentHarness, CodeForge, Directory, MetricsSink, OutcomeSource, Signal, Team, TaskId, WorldCheck } from "@openfactory/contracts";
+import { teamFor, type AgentHarness, type CodeForge, type Directory, type MetricsSink, type OutcomeSource, type Signal, type Team, type TaskId, type WorldCheck } from "@openfactory/contracts";
+import { globToRegex } from "@openfactory/rules";
 import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
@@ -81,6 +82,20 @@ async function main() {
   if (otlp) sinks.push(otlp);
   const evidence = fileEvidenceStore(join(cfg.DATA_DIR, "evidence"), cfg.PUBLIC_URL);
 
+  // Team factories (factory.yaml `factories:`): each may name its own world and merge-risk paths.
+  const org = loadOrgConfig(cfg.FACTORY_FILE);
+  const globs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").map(globToRegex) : []);
+  const teamFactories = Object.fromEntries(
+    Object.entries(org.factories).map(([slug, f]) => [
+      slug,
+      {
+        ...(f.world !== undefined ? { world: f.world ? { world: f.world, simDays: extras.world?.simDays ?? 30 } : null } : {}),
+        ...(f.mergeRisk
+          ? { risk: { ...extras.risk, riskyPaths: [...extras.risk.riskyPaths, ...globs(f.mergeRisk.high)], safePaths: globs(f.mergeRisk.low) } }
+          : {}),
+      },
+    ]),
+  );
   const jobDeps: JobDeps = {
       ledger,
       rules: { label: cfg.FACTORY_LABEL, botLogins, maxTaskUsd: cfg.MAX_TASK_USD, maxReviewRounds: cfg.MAX_REVIEW_ROUNDS },
@@ -99,6 +114,7 @@ async function main() {
         : null,
       scorers: factScorers,
       world,
+      factories: teamFactories,
       sinks,
       config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/", risk: extras.risk, versionPrompts: extras.versionPrompts },
       log,
@@ -113,13 +129,17 @@ async function main() {
       harnessInfo: { name: agent.name, model: agent.model },
       modelRouting,
       // The app's rollout (Factories > Versions) overrides factory.yaml's, read per new task.
-      rollout: async () => {
-        const r = await store.rollout("default").catch(() => null);
+      rollout: async (factory: string) => {
+        const r = await store.rollout(factory).catch(() => null);
         if (!r) return extras.rollout;
         return { stable: r.state.live ?? cfg.FACTORY_VERSION, candidate: r.state.candidate, share: r.state.share };
       },
       versionModels: extras.versionModels,
       knownRepos: cfg.repos,
+      factoryOf: async (t) => {
+        const team = teamFor(await directory.teams(), t);
+        return { factory: team?.factory ?? "default", team: team?.slug ?? null };
+      },
     },
   );
   log("resumed tasks", { count: await jobs.resumeAll() });
@@ -205,7 +225,6 @@ async function main() {
 
   // Teams: factory.yaml `teams:` (a list, or a directory provider such as GitHub org teams). Without either,
   // one team holds the factory's repos and everyone who has asked for a task.
-  const org = loadOrgConfig(cfg.FACTORY_FILE);
   let directory: Directory;
   if (org.teams) directory = configDirectory(org.teams);
   else if (org.directory) directory = cachedDirectory(await registry.build("directory", org.directory));

@@ -25,7 +25,9 @@ export type TaskJobsOptions = {
   /** Which worker model a new task gets (factory.yaml `models:`). Null: always harnessInfo.model. */
   modelRouting?: ModelRouting | null;
   /** A candidate factory version served to a share of new tasks (factory.yaml `rollout:`). */
-  rollout?: Rollout | null | (() => Promise<Rollout | null>);
+  rollout?: Rollout | null | ((factory: string) => Promise<Rollout | null>);
+  /** Which factory (org default or a team factory) a new task runs on. Missing: always "default". */
+  factoryOf?: (task: { requestedBy: string; repo: RepoRef }) => Promise<{ factory: string; team: string | null }>;
   /** Model routing per factory version, when a version changes it. */
   versionModels?: Record<string, ModelRouting>;
   /** Every repo the factory may work in; an issue that names one of them adds it to the task's scope. */
@@ -137,7 +139,10 @@ export class TaskJobs {
         return action;
       case "start_task": {
         if (signal.type !== "issue_labeled") return action;
-        const rollout = typeof this.opts.rollout === "function" ? await this.opts.rollout() : (this.opts.rollout ?? null);
+        const assigned = this.opts.factoryOf
+          ? await this.opts.factoryOf({ requestedBy: signal.actor.login, repo: signal.repo }).catch(() => ({ factory: "default", team: null }))
+          : { factory: "default", team: null };
+        const rollout = typeof this.opts.rollout === "function" ? await this.opts.rollout(assigned.factory) : (this.opts.rollout ?? null);
         const version = rollout ? pickVersion(signal.id, rollout) : { version: this.opts.factoryVersion(), arm: "stable" as const };
         const routing = this.opts.versionModels?.[version.version] ?? this.opts.modelRouting;
         const labels = signal.labels ?? [signal.label];
@@ -161,6 +166,7 @@ export class TaskJobs {
         });
         if (!appended) return { ...action, taskId: record.id };
         this.deps.log("model routed", { taskId: record.id, issue: signal.issueNumber, model: routed.model, reason: routed.reason });
+        if (this.opts.factoryOf) await l.append(record.id, "factory_assigned", assigned);
         if (rollout?.candidate) await l.append(record.id, "version_routed", { version: version.version, arm: version.arm, share: rollout.share });
         const scope = planScope(signal.repo, { title: signal.title, body: signal.body, labels }, this.opts.knownRepos ?? []);
         if (scope.repos.length > 1)
