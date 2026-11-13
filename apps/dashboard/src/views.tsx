@@ -675,7 +675,7 @@ function RunCard({ run }: { run: BenchRun }) {
         <details><summary class="muted">Attempts</summary>
           <table>
             <tr><th>Arm</th><th>Task</th><th>#</th><th>Result</th><th class="num">Cost</th><th>Notes</th></tr>
-            {run.results.map((r) => <tr><td>{r.arm}</td><td>{r.benchmarkTaskId}</td><td>{r.attempt}</td><td class={r.passed ? "good" : "bad"}>{r.passed ? "pass" : "fail"}</td><td class="num">{usd(r.usage.costUsd)}</td><td style="white-space:normal"><pre>{r.notes.slice(-600)}</pre></td></tr>)}
+            {run.results.map((r) => <tr><td>{r.arm}</td><td>{r.benchmarkTaskId}</td><td>{r.attempt}</td><td class={r.passed ? "good" : "bad"}>{r.passed ? "pass" : "fail"}{r.checks ? <div class="muted">repo {r.checks.repo ? "✓" : "✗"} · world {r.checks.world === null ? "–" : r.checks.world ? "✓" : "✗"}</div> : null}</td><td class="num">{usd(r.usage.costUsd)}</td><td style="white-space:normal"><pre>{r.notes.slice(-600)}</pre></td></tr>)}
           </table>
         </details>
       ) : null}

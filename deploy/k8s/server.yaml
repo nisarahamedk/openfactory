@@ -33,7 +33,7 @@ spec:
             - { name: DXFAKE_URL, value: "http://dxfake.factory.svc:8787" }
             # FirstWord's runner has no file filter: keep only the hidden tests/*.test.ts, then `pnpm test`.
             - name: BENCH_CHECK_JSON
-              value: '{"testFilePattern":"^tests/[^/]+\\.test\\.ts$","run":["pnpm","test"],"filter":"delete-others","testDir":"tests","testSuffix":".test.ts"}'
+              value: '{"testFilePattern":"^tests/[^/]+\\.test\\.ts$","run":["pnpm","test"],"filter":"delete-others","testDir":"tests","testSuffix":".test.ts","world":{"testFilePattern":"^tests/e2e/.+\\.spec\\.ts$","run":"STAGE_URL=\"$FACTORY_ENV_URL\" pnpm exec playwright test"}}'
             - name: DATABASE_URL
               valueFrom: { secretKeyRef: { name: postgres, key: DATABASE_URL } }
             - name: GITHUB_TOKEN

@@ -425,6 +425,14 @@ export const BenchmarkTask = z.object({
     kind: z.enum(["tests_from_merged_pr", "command"]),
     command: z.array(z.string()), // run in the workspace after the agent finishes
     files: z.record(z.string(), z.string()), // test files copied in before the check runs
+    /**
+     * World check: deploy the attempt into a fresh DevEnvironment and run these tests
+     * against the running product. Null when the task has none (or was captured before).
+     */
+    world: z
+      .object({ command: z.array(z.string()), files: z.record(z.string(), z.string()) })
+      .nullable()
+      .default(null),
   }),
   createdAt: z.string(),
 });
@@ -438,6 +446,8 @@ export const ReplayResult = z.object({
   usage: Usage,
   durationMs: z.number().int(),
   notes: z.string(),
+  /** Each check on its own; `passed` is all of them. world is null when not run. */
+  checks: z.object({ repo: z.boolean(), world: z.boolean().nullable() }).nullable().default(null),
 });
 export type ReplayResult = z.infer<typeof ReplayResult>;
 
