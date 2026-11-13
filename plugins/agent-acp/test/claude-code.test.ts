@@ -65,7 +65,7 @@ test("a resumed session keeps the conversation", { timeout: 180_000 }, async () 
     log: (l) => logs.push(l),
   });
 
-  const first = await harness.openSession({ workspace: ws, cwd: ws.repoPath, systemPrompt: "You are a factory worker.", resumeSessionId: null });
+  const first = await harness.openSession({ workspace: ws, cwd: ws.repoPath, systemPrompt: "You are a factory worker.", resumeSessionId: null, env: {} });
   const updates: AgentUpdate[] = [];
   const turn1 = await first.prompt("ROUND1: create hello.txt", (u) => updates.push(u));
   const sessionId = first.sessionId;
@@ -76,7 +76,7 @@ test("a resumed session keeps the conversation", { timeout: 180_000 }, async () 
   expect(updates.some((u) => u.kind === "tool_call")).toBe(true);
   expect(readFileSync(join(ws.repoPath, "hello.txt"), "utf8")).toBe("hello\n");
 
-  const second = await harness.openSession({ workspace: ws, cwd: ws.repoPath, systemPrompt: "You are a factory worker.", resumeSessionId: sessionId });
+  const second = await harness.openSession({ workspace: ws, cwd: ws.repoPath, systemPrompt: "You are a factory worker.", resumeSessionId: sessionId, env: {} });
   const turn2 = await second.prompt("ROUND2: reviewer asks to add world", () => undefined);
   await second.close();
 

@@ -44,3 +44,6 @@ export function claudeCodeHarness(options: ClaudeCodeOptions): AcpHarness {
     log: options.log,
   });
 }
+
+/** Factory used by apps/server to wire the worker from settings. */
+export const createAcpHarness = claudeCodeHarness;
