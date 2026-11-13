@@ -68,3 +68,13 @@ describe("model", () => {
     expect(people(fs, teams, { kind: "org" }).map((p) => `${p.login}:${p.asked}`)).toEqual(["dana:1", "omar:2"]);
   });
 });
+
+describe("md", () => {
+  it("renders bold, code and bullets, drops HTML, keeps line breaks", async () => {
+    const { md, sentence } = await import("./views.js");
+    const html = md("**Ask**\n- Opening `/pricing#id` works\n<sub>note</sub> <script>x</script>").map(String).join("");
+    expect(html).toBe("<b>Ask</b>\n• Opening <code>/pricing#id</code> works\nnote x");
+    expect(sentence("duplicate of #130")).toBe("duplicate of #130.");
+    expect(sentence("done!")).toBe("done!");
+  });
+});
