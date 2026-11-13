@@ -4,8 +4,28 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }, "./mock-anthropic": { "types": "./dist/mock-anthropic.d.ts", "default": "./dist/mock-anthropic.js" } },
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "vitest run" },
-  "dependencies": { "@openfactory/contracts": "workspace:*", "zod": "4.1.12" },
-  "devDependencies": { "@agentclientprotocol/claude-agent-acp": "0.106.0", "@openfactory/workspace-local": "workspace:*" }
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./mock-anthropic": {
+      "types": "./dist/mock-anthropic.d.ts",
+      "default": "./dist/mock-anthropic.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openfactory/contracts": "workspace:*",
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.106.0",
+    "@openfactory/workspace-local": "workspace:*",
+    "@openfactory/conformance": "workspace:*"
+  }
 }

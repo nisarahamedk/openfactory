@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@openfactory/agent-acp": "workspace:*",
-    "@openfactory/env-devspace": "workspace:*"
+    "@openfactory/env-devspace": "workspace:*",
+    "@openfactory/conformance": "workspace:*"
   }
 }

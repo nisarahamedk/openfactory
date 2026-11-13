@@ -110,7 +110,9 @@ export class K8sWorkspace implements Workspace {
   async get(id: string): Promise<WorkspaceHandle | null> {
     try {
       const claim = await this.core.readNamespacedPersistentVolumeClaim({ name: id, namespace: this.options.namespace });
-      const taskId = claim.metadata?.labels?.["openfactory.dev/task"] ?? id;
+      // Only claims this workspace made, and not one already being deleted.
+      const taskId = claim.metadata?.labels?.["openfactory.dev/task"];
+      if (taskId === undefined || claim.metadata?.deletionTimestamp !== undefined) return null;
       const image = claim.metadata?.annotations?.["openfactory.dev/image"] ?? this.options.image;
       return this.handle(id, image, taskId);
     } catch (error) {
@@ -322,6 +324,16 @@ class K8sWorkspaceHandle implements WorkspaceHandle {
     } catch (error) {
       if (!isNotFound(error)) throw error;
     }
+    // The claim lingers until its volume is released; destroy returns once it is gone.
+    await this.waitFor(async () => {
+      try {
+        await this.core.readNamespacedPersistentVolumeClaim({ name: this.id, namespace: this.options.namespace });
+        return false;
+      } catch (error) {
+        if (isNotFound(error)) return true;
+        throw error;
+      }
+    }, "deleted");
   }
 
   /** Runs `cmd` in `cwd` with extra env, and a time limit when given. */

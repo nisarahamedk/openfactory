@@ -247,6 +247,9 @@ importers:
       '@agentclientprotocol/claude-agent-acp':
         specifier: 0.106.0
         version: 0.106.0(@anthropic-ai/sdk@0.129.0(zod@4.1.12))(@modelcontextprotocol/sdk@1.32.2(zod@4.1.12))
+      '@openfactory/conformance':
+        specifier: workspace:*
+        version: link:../../packages/conformance
       '@openfactory/workspace-local':
         specifier: workspace:*
         version: link:../workspace-local
@@ -259,6 +262,10 @@ importers:
       '@openfactory/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+    devDependencies:
+      '@openfactory/conformance':
+        specifier: workspace:*
+        version: link:../../packages/conformance
 
   plugins/github:
     dependencies:
@@ -330,6 +337,9 @@ importers:
       '@openfactory/agent-acp':
         specifier: workspace:*
         version: link:../agent-acp
+      '@openfactory/conformance':
+        specifier: workspace:*
+        version: link:../../packages/conformance
       '@openfactory/env-devspace':
         specifier: workspace:*
         version: link:../env-devspace

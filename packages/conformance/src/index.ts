@@ -18,3 +18,9 @@ export { InMemoryEvidenceStore } from "./evidence-store/fake.js";
 export { describeWorkspaceConformance, type WorkspaceSubject, type WorkspaceConformanceOptions } from "./workspace/suite.js";
 export { TempDirWorkspace } from "./workspace/fake.js";
 export { makeOriginRepo } from "./workspace/origin.js";
+
+export { describeDevEnvironmentConformance, type DevEnvironmentSubject, type DevEnvironmentConformanceOptions } from "./dev-environment/suite.js";
+export { InMemoryDevEnvironment } from "./dev-environment/fake.js";
+
+export { describeAgentHarnessConformance, conformanceReply, type AgentHarnessSubject, type AgentHarnessConformanceOptions } from "./agent-harness/suite.js";
+export { ScriptedAgentHarness, type FakeModel } from "./agent-harness/fake.js";
