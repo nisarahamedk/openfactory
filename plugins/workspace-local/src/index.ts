@@ -23,13 +23,25 @@ export class LocalWorkspace implements Workspace {
 
   constructor(private readonly options: LocalWorkspaceOptions) {}
 
-  async create(input: { taskId: TaskId; repo: RepoRef; branch: string; image: string | null }): Promise<WorkspaceHandle> {
+  async create(input: {
+    taskId: TaskId;
+    repo: RepoRef;
+    branch: string;
+    image: string | null;
+    startRef?: string | null;
+  }): Promise<WorkspaceHandle> {
     const dir = join(this.options.root, input.taskId);
     const repoPath = join(dir, "repo");
     await mkdir(dir, { recursive: true });
     const handle = new LocalWorkspaceHandle(input.taskId, dir, repoPath, this.options.baseEnv);
-    if (!(await exists(join(repoPath, ".git")))) {
-      await handle.mustExec(["git", "clone", this.options.cloneUrl(input.repo), repoPath], { cwd: dir });
+    if (await exists(join(repoPath, ".git"))) return handle;
+    await handle.mustExec(["git", "clone", this.options.cloneUrl(input.repo), repoPath], { cwd: dir });
+    const startRef = input.startRef ?? null;
+    if (startRef !== null) {
+      // The ref may be a commit not on any branch the clone fetched.
+      await handle.exec(["git", "fetch", "origin", startRef], { cwd: repoPath });
+      await handle.mustExec(["git", "checkout", "--quiet", "-B", input.branch, startRef], { cwd: repoPath });
+      return handle;
     }
     const branchExists = await handle.exec(["git", "rev-parse", "--verify", "--quiet", `refs/remotes/origin/${input.branch}`], {
       cwd: repoPath,
@@ -37,8 +49,7 @@ export class LocalWorkspace implements Workspace {
     await handle.mustExec(
       branchExists.exitCode === 0 ? ["git", "checkout", input.branch] : ["git", "checkout", "-B", input.branch],
       { cwd: repoPath },
-    );
-    return handle;
+    );    return handle;
   }
 
   async get(id: string): Promise<WorkspaceHandle | null> {
