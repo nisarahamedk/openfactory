@@ -5,6 +5,22 @@ import { ArmSpec, BenchRun } from "@openfactory/bench";
 /** Error body every /v1 route returns on failure. */
 export const ApiError = z.object({ code: z.string(), message: z.string() }).meta({ id: "ApiError" });
 
+/** What this factory is: version, providers, models and the prompts it gives the agent. Secrets are never included. */
+export const FactoryInfo = z
+  .object({
+    version: z.string(),
+    providersFrom: z.string().meta({ description: "factory.yaml path, or \"env\"" }),
+    providers: z.record(z.string(), z.object({ name: z.string(), options: z.record(z.string(), z.unknown()) })),
+    agent: z.object({ name: z.string(), model: z.string() }),
+    foreman: z.object({ model: z.string() }),
+    rules: z.object({ label: z.string(), maxTaskUsd: z.number(), maxReviewRounds: z.number(), maxNudges: z.number() }),
+    prompts: z.object({ system: z.string(), intake: z.string(), review: z.string(), foreman: z.string() }),
+  })
+  .meta({ description: "This factory" });
+
+/** Body of POST /v1/tasks/{id}/cancel. */
+export const CancelTask = z.object({ by: z.string().max(100).optional(), reason: z.string().max(1000).optional() }).meta({ id: "CancelTask" });
+
 /** Body of POST /v1/egress. */
 export const EgressReport = z
   .object({
@@ -65,6 +81,21 @@ export const V1_ROUTES: RouteSpec[] = [
     operationId: "listTaskEvents",
     summary: "The task's append-only event log, oldest first",
     responses: { 200: { description: "Events", schema: z.object({ events: z.array(LedgerEvent) }) }, ...notFound },
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/cancel",
+    operationId: "cancelTask",
+    summary: "Stop a task: abort its running turn, put its environment to sleep, mark it failed (stage \"cancelled\"). A later comment resumes it.",
+    body: CancelTask,
+    responses: { 200: { description: "The task after cancelling", schema: z.object({ task: TaskRecord }) }, ...bad, ...notFound },
+  },
+  {
+    method: "get",
+    path: "/factory",
+    operationId: "getFactory",
+    summary: "This factory: version, providers (no secrets), agent and foreman models, rules and prompts",
+    responses: { 200: { description: "Factory", schema: z.object({ factory: FactoryInfo }) } },
   },
   {
     method: "post",

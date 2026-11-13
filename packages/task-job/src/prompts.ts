@@ -25,6 +25,12 @@ Secrets: never print, commit or echo tokens or keys.
 ${envSkill}`;
 }
 
+/** The prompts with placeholders instead of a task, for GET /v1/factory (what this factory version tells the agent). */
+export function promptTemplates(baseBranch: string, envSkill = "{environment skill}"): { system: string; intake: string; review: string } {
+  const sample = { title: "{task title}", ask: "{issue body}", source: { url: "{issue url}", issueNumber: "{issue}" } } as unknown as TaskRecord;
+  return { system: systemPrompt(sample, "{branch}", envSkill, baseBranch), intake: intakePrompt(sample), review: reviewPrompt("{comment}") };
+}
+
 export function intakePrompt(record: TaskRecord): string {
   return `New task from ${record.source.url ?? "the factory"}:
 

@@ -21,7 +21,7 @@ it("serves tasks, signals and evidence behind the API token", async () => {
   });
   const evidence = fileEvidenceStore(mkdtempSync(join(tmpdir(), "ev-")), "https://f.example");
   const got: unknown[] = [];
-  const app = createApp({ ledger, onSignal: async (s) => got.push(s), evidence, apiToken: "tok", webhook: null, bench: null, publicUrl: null, log: () => {} });
+  const app = createApp({ ledger, onSignal: async (s) => got.push(s), evidence, apiToken: "tok", webhook: null, bench: null, factory: async () => { throw new Error("unused"); }, cancel: async () => null, publicUrl: null, log: () => {} });
   const auth = { authorization: "Bearer tok" };
 
   expect((await app.request("/v1/tasks")).status).toBe(401);
