@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
-import { GitHubBundlePusher, GitHubClient, parseWebhook } from "@openfactory/github";
-import type { AgentHarness, MetricsSink, Signal, TaskId } from "@openfactory/contracts";
+import { GitHubClient, parseWebhook } from "@openfactory/github";
+import type { AgentHarness, CodeForge, MetricsSink, Signal, TaskId } from "@openfactory/contracts";
 import { FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
@@ -52,7 +52,18 @@ async function main() {
   const agent = need(p.agent, "agent");
   const workspace = need(p.workspace, "workspace");
   const environment = need(p.devEnvironment, "devEnvironment");
-  const codeForge = need(p.codeForge, "codeForge");
+  const forge = need(p.codeForge, "codeForge");
+  // The agent's per-task repo token comes from Secrets when configured (scoped to the task's repo), else the forge.
+  const codeForge: CodeForge = {
+    name: forge.name,
+    openPullRequest: (i) => forge.openPullRequest(i),
+    findPullRequestForBranch: (r, b) => forge.findPullRequestForBranch(r, b),
+    mintPushToken: async (repo) => {
+      if (!p.secrets) return forge.mintPushToken(repo);
+      const s = await p.secrets.issue({ kind: "git", repo, access: "write" });
+      return { token: s.value, expiresAt: s.expiresAt ?? new Date(Date.now() + 3600_000).toISOString() };
+    },
+  };
   const chat = need(p.chat, "chat");
   const sinks: MetricsSink[] = p.metrics ? [p.metrics] : [];
   const evidence = fileEvidenceStore(join(cfg.DATA_DIR, "evidence"), cfg.PUBLIC_URL);
@@ -67,10 +78,6 @@ async function main() {
       workspace,
       environment,
       evidence,
-      // Push credentials come from Secrets when configured (per repo, write), else the server's GitHub token.
-      pusher: new GitHubBundlePusher({
-        token: async (repo) => (p.secrets ? (await p.secrets.issue({ kind: "git", repo, access: "write" })).value : cfg.GITHUB_TOKEN),
-      }),
       modelKeys: p.modelGateway
         ? {
             forTask: (taskId: string) => p.modelGateway!.forTask(taskId as TaskId, { usd: cfg.MAX_TASK_USD }),

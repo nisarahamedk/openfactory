@@ -59,6 +59,17 @@ The factory also exposes itself through open protocols, so an org's own agents a
 
 Install uses an **OCI image**, a Helm chart and an **OpenTofu/Terraform** module; Alchemy is the option for TypeScript shops.
 
+## Sandbox security
+
+Decided by Nisar on 2026-11-13, replacing the earlier "server pushes, sandbox read-only" design.
+
+- **The agent works like an engineer.** It pushes its branch, opens the PR and comments with `git` and `gh`. A read-only agent would push all of that into the server, and Warp and Open-Inspect don't work that way either.
+- **One credential per task, scoped to one repo.** `CodeForge.mintPushToken(repo)` hands the agent a token for the task's repo only. It is short-lived where the forge allows it (GitHub App installation token, 1 h, refreshed before each turn) and revoked when the task ends. Until the GitHub App exists, it is a fine-grained PAT limited to that repo. With a `secrets` provider, the token comes from `Secrets.issue({ kind: "git", repo, access: "write" })`. Model access is a per-task gateway key with the task's budget (`ModelGateway`).
+- **Branch protection is the merge control.** `main` requires review, and humans merge. The factory's rules never merge.
+- **No open internet from sandboxes. This is the main control.** All sandbox egress goes through an egress proxy, deny by default. The allowlist holds the forge (github.com and its API), the model gateway, the package registries the repo needs (npm, …) and the task's own dev environment. NetworkPolicy blocks every other route out of the sandbox namespace. The allowlist is per factory (`factory.yaml`, `egress.allow`).
+- **Every request is recorded.** The proxy's log is aggregated per task, host and minute and posted to `POST /v1/egress`. It lands in the ledger as `egress` events, denied requests included, so a reviewer and the scorers can see what the agent reached.
+- **What a leaked token can do:** push branches and comment on one repo for up to an hour. It cannot merge to `main`, reach other repos, or send data anywhere outside the allowlist.
+
 ## Observability
 
 Three layers, kept apart:
@@ -90,7 +101,7 @@ Not yet verified against current docs:
 ## Migration from today's code
 
 1. Rename `CodeHost` → `CodeForge` and `ChatSurface` → `Chat`; split `code-github` into one `github` provider that registers several abstractions.
-2. Add `ModelGateway`, `Secrets`, `EvidenceStore` and `Telemetry` contracts. Move the per-task push token and per-task model key behind `Secrets` and `ModelGateway`, which also closes the two sandbox gaps found in the security review.
+2. Add `ModelGateway`, `Secrets`, `EvidenceStore` and `Telemetry` contracts. Move the per-task repo token and per-task model key behind `Secrets` and `ModelGateway`. With the egress allowlist, this closes the sandbox gaps from the security review (see Sandbox security).
 3. Add a provider registry and `factory.yaml` loading. Keep env-var config as a fallback.
 4. Add a conformance suite per abstraction, starting with Workspace, DevEnvironment and AgentHarness.
 5. Add the factory's own MCP server over the `/v1` routes.

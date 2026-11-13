@@ -17,11 +17,6 @@ export interface EvidenceStore {
   put(taskId: string, name: string, bytes: Uint8Array, contentType: string): Promise<{ url: string }>;
 }
 
-/** Pushes a branch from a git bundle made in the sandbox, so push credentials never enter the sandbox. */
-export interface BranchPusher {
-  push(repo: RepoRef, branch: string, bundle: Uint8Array): Promise<void>;
-}
-
 /** Per-task model credentials (e.g. a LiteLLM key with the task's budget), revoked when the task ends. */
 export interface ModelKeys {
   forTask(taskId: string): Promise<Record<string, string>>;
@@ -40,7 +35,6 @@ export type JobDeps = {
   workspace: Workspace;
   environment: Environment;
   evidence: EvidenceStore;
-  pusher: BranchPusher;
   modelKeys: ModelKeys | null;
   scorers: Scorer[];
   sinks: MetricsSink[];

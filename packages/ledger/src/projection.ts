@@ -41,6 +41,8 @@ export const EventData = {
   score_added: z.object({ score: Score }),
   outcome_added: z.object({ outcome: Outcome }),
   error: z.object({ message: z.string(), stage: z.string() }),
+  /** Network requests from the task's sandbox, as the egress proxy saw them (aggregated per host and window). */
+  egress: z.object({ host: z.string(), allowed: z.boolean(), count: z.number().int().positive(), from: z.string(), to: z.string() }),
   /** A signal that changed nothing on the record by itself (merge/close); kept for de-duplication and the timeline. */
   signal_received: z.object({ type: z.string(), actor: z.string() }),
 } as const;
