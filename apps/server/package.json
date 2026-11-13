@@ -1,0 +1,24 @@
+{
+  "name": "@openfactory/server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "vitest run", "start": "node dist/main.js" },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.5.2",
+    "@hono/node-server": "1.19.6",
+    "@openfactory/bench": "workspace:*",
+    "@openfactory/code-github": "workspace:*",
+    "@openfactory/contracts": "workspace:*",
+    "@openfactory/foreman": "workspace:*",
+    "@openfactory/ledger": "workspace:*",
+    "@openfactory/metrics-dxfake": "workspace:*",
+    "@openfactory/rules": "workspace:*",
+    "@openfactory/scoring": "workspace:*",
+    "@openfactory/task-job": "workspace:*",
+    "hono": "4.10.4",
+    "zod": "4.1.12"
+  },
+  "devDependencies": { "@electric-sql/pglite": "0.5.16", "drizzle-orm": "0.45.4" }
+}
