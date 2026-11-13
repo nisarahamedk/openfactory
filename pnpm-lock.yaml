@@ -339,6 +339,13 @@ importers:
       '@openfactory/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+    devDependencies:
+      '@openfactory/conformance':
+        specifier: workspace:*
+        version: link:../../packages/conformance
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@24.19.2)(yaml@2.8.1)
 
 packages:
 

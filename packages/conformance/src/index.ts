@@ -14,3 +14,7 @@ export { InMemoryMetricsSink } from "./metrics-sink/fake.js";
 
 export { describeEvidenceStoreConformance } from "./evidence-store/suite.js";
 export { InMemoryEvidenceStore } from "./evidence-store/fake.js";
+
+export { describeWorkspaceConformance, type WorkspaceSubject, type WorkspaceConformanceOptions } from "./workspace/suite.js";
+export { TempDirWorkspace } from "./workspace/fake.js";
+export { makeOriginRepo } from "./workspace/origin.js";

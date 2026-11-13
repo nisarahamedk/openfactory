@@ -355,3 +355,4 @@ function parseList(value: string | undefined): string[] {
 export const createDevspaceEnvironment = (options: DevspaceEnvironmentOptions): DevspaceEnvironment =>
   new DevspaceEnvironment(options);
 export { renderSkill } from "./skill.js";
+export { provider } from "./provider.js";

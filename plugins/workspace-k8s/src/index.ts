@@ -468,3 +468,4 @@ export function fromEnv(env: Env): K8sWorkspace {
 }
 
 export const createK8sWorkspace = (options: K8sWorkspaceOptions): K8sWorkspace => new K8sWorkspace(options);
+export { provider } from "./provider.js";
