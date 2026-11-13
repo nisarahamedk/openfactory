@@ -3,7 +3,7 @@ import { basicAuth } from "hono/basic-auth";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import { TaskId } from "@openfactory/contracts";
-import { FactoryApiError, type FactoryApi } from "./api.js";
+import { FactoryApiError, type FactoryApi } from "@openfactory/client";
 import { BenchPage, ErrorPage, Layout, TaskPage, TasksPage, VersionsPage } from "./views.js";
 
 /**

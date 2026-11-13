@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { serve } from "@hono/node-server";
 import { z } from "zod";
-import { FactoryApi } from "./api.js";
+import { FactoryApi } from "@openfactory/client";
 import { createDashboard } from "./app.js";
 
 /**
