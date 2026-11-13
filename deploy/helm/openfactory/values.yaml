@@ -33,7 +33,13 @@ factory:
 
 # Secrets you create before installing (kubectl create secret generic ...). Names only.
 secrets:
-  github:                # GitHub token: fine-grained, the factory's repos only (Contents, Issues, PRs: RW; Actions, Statuses: R)
+  # Recommended: a GitHub App. Each task's agent gets its own token for its repos only, valid 1 hour.
+  # Secret with keys GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY (the PEM). See docs/self-host.md.
+  githubApp:
+    name: ""
+  # Fallback: a fine-grained token, the factory's repos only (Contents, Issues, PRs: RW; Actions, Statuses: R).
+  # Without githubApp, agents get this same token. Leave name empty when githubApp is set.
+  github:
     name: openfactory-github
     key: GITHUB_TOKEN
   githubWebhook:         # optional; only with signals: webhook|both

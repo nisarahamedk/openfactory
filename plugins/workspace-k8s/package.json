@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@openfactory/contracts": "workspace:*",
+    "@openfactory/github": "workspace:*",
     "@kubernetes/client-node": "1.4.0"
   },
   "devDependencies": {

@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
-import { GitHubClient, parseWebhook } from "@openfactory/github";
+import { GitHubClient, githubAppFromEnv, parseWebhook } from "@openfactory/github";
 import { teamFor, type RepoRef, type AgentHarness, type CodeForge, type Directory, type MetricsSink, type OutcomeSource, type Signal, type Team, type TaskId, type WorldCheck } from "@openfactory/contracts";
 import { globToRegex } from "@openfactory/rules";
 import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
@@ -27,10 +27,14 @@ async function main() {
   const cfg = loadConfig(process.env);
   const { ledger, app: store, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
 
-  const gh = new GitHubClient({ token: () => cfg.GITHUB_TOKEN });
-  const tokenLogin = await gh.whoami().catch(() => null);
-  const botLogins = [...cfg.BOT_LOGINS.split(",").map((s) => s.trim()).filter(Boolean)];
-  log("github identity", { login: tokenLogin, botLogins });
+  // A GitHub App when configured (scoped, 1-hour tokens per task), else the PAT.
+  const ghApp = githubAppFromEnv(process.env);
+  const serverToken = async () => (ghApp ? ghApp.serverToken() : cfg.GITHUB_TOKEN!);
+  const gh = new GitHubClient({ token: serverToken });
+  const ghIdentity = () => (ghApp ? ghApp.botLogin() : gh.whoami());
+  const tokenLogin = await ghIdentity().catch(() => null);
+  const botLogins = [...cfg.BOT_LOGINS.split(",").map((s) => s.trim()).filter(Boolean), ...(ghApp && tokenLogin ? [tokenLogin] : [])];
+  log("github identity", { login: tokenLogin, botLogins, auth: ghApp ? "github app" : "pat" });
 
   const models = createModels();
   if (cfg.MODEL_PROXY_URL && cfg.MODEL_PROXY_KEY) {
@@ -107,6 +111,8 @@ async function main() {
   ];
   const health = new Health({
     forgeGet: (path) => gh.request("GET", path),
+    identity: ghIdentity,
+    pushTokens: p.secrets ? "secrets" : ghApp ? "app" : "shared",
     repos: cfg.repos,
     gateway: cfg.MODEL_PROXY_URL && cfg.MODEL_PROXY_KEY ? { baseUrl: cfg.MODEL_PROXY_URL, key: cfg.MODEL_PROXY_KEY } : null,
     models: cfg.MODEL_PROXY_URL ? [...routedModels, cfg.FOREMAN_MODEL] : [],
@@ -224,7 +230,7 @@ async function main() {
   const bench = cfg.BENCH_DIR
     ? createBenchRoutes({
         ledger,
-        prs: new GitHubPullRequestSource(async () => cfg.GITHUB_TOKEN),
+        prs: new GitHubPullRequestSource(serverToken),
         store: new FileBenchStore(cfg.BENCH_DIR),
         captureOptions: cfg.BENCH_CHECK_JSON ? captureOptionsFrom(parseCheckSpec(cfg.BENCH_CHECK_JSON)) : defaultCaptureOptions,
         armFor: (spec) => ({

@@ -99,11 +99,22 @@ spec:
             - { name: ENV_AGENT_VARS, value: {{ join "," $vars | quote }} }
             - name: DATABASE_URL
               valueFrom: { secretKeyRef: { name: {{ include "of.dbSecret" . }}, key: {{ include "of.dbFactoryKey" . }} } }
+            {{- with .Values.secrets.githubApp.name }}
+            - name: GITHUB_APP_ID
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: GITHUB_APP_ID } }
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: GITHUB_APP_PRIVATE_KEY } }
+            {{- end }}
+            {{- with .Values.secrets.github.name }}
             - name: GITHUB_TOKEN
-              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.github.name }}, key: {{ .Values.secrets.github.key }} } }
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: {{ $.Values.secrets.github.key }} } }
+            {{- if not $.Values.secrets.githubApp.name }}
             # Clone token for the workspace's init container only; the agent container never mounts it.
+            # With a GitHub App, each clone gets a read-only token for its repo instead.
             - name: WORKSPACE_GIT_TOKEN
-              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.github.name }}, key: {{ .Values.secrets.github.key }} } }
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: {{ $.Values.secrets.github.key }} } }
+            {{- end }}
+            {{- end }}
             {{- with .Values.secrets.githubWebhook.name }}
             - name: GITHUB_WEBHOOK_SECRET
               valueFrom: { secretKeyRef: { name: {{ . }}, key: {{ $.Values.secrets.githubWebhook.key }} } }
