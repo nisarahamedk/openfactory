@@ -39,6 +39,8 @@ spec:
             - { name: MAX_TASK_USD, value: "2" }
             # Workspaces use ~0.5Gi; a 2Gi request left no room for a task's preview env on the 8GB VM.
             - { name: WORKSPACE_MEMORY, value: "1Gi" }
+            # 8GB VM: three awake workspaces (tasks and replays together) plus their preview envs fit; more wait in line.
+            - { name: MAX_AWAKE_WORKSPACES, value: "3" }
             - { name: MENTIONS, value: "off" }
             - { name: MODEL_PROXY_URL, value: "http://litellm.factory.svc:4000" }
             - { name: FOREMAN_MODEL, value: claude-haiku }

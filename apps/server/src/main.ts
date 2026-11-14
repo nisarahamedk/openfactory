@@ -13,7 +13,7 @@ import { globToRegex } from "@openfactory/rules";
 import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
-import { applyBundle, bundleMcp, promptTemplates, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps } from "@openfactory/task-job";
+import { admitted, applyBundle, bundleMcp, promptTemplates, WorkSlots, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps } from "@openfactory/task-job";
 import { fileEvidenceStore, createApp } from "./app.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
@@ -67,7 +67,12 @@ async function main() {
     ? { check: await registry.buildOptional<WorldCheck>("worldCheck", { name: extras.world.provider, options: extras.world.options }), world: extras.world.name, simDays: extras.world.simDays }
     : null;
   log("world check", { world: world ? `${world.world} (${world.simDays} days)` : null });
-  const workspace = need(p.workspace, "workspace");
+  // Admission control: live tasks and benchmark replays share MAX_AWAKE_WORKSPACES slots (default 4); the rest wait in line.
+  const slots = new WorkSlots(Math.max(1, Number(process.env.MAX_AWAKE_WORKSPACES ?? 4)));
+  const workspace = admitted(need(p.workspace, "workspace"), slots, async (taskId, position) => {
+    log("queued for a workspace", { taskId, position, slots: slots.slots });
+    if (await ledger.getTask(taskId).catch(() => null)) await ledger.append(taskId, "queued", { position, slots: slots.slots }).catch(() => undefined);
+  });
   const environment = need(p.devEnvironment, "devEnvironment");
   const forge = need(p.codeForge, "codeForge");
   // The agent's per-task repo token comes from Secrets when configured (scoped to the task's repo), else the forge.

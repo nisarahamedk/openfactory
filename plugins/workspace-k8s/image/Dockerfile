@@ -37,8 +37,12 @@ RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERS
  && curl -fsSLo /tmp/gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
  && echo "${GH_SHA256}  /tmp/gh.tgz" | sha256sum -c - \
  && tar -xzf /tmp/gh.tgz -C /tmp \
- && mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
+ && mkdir -p /usr/local/lib \
+ && mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/lib/gh-real \
  && rm -rf /tmp/gh.tgz "/tmp/gh_${GH_VERSION}_linux_amd64"
+
+# gh is a thin wrapper that adds the factory marker to every comment the agent writes (see gh-mark.sh).
+COPY --chmod=755 gh-mark.sh /usr/local/bin/gh
 
 # Helm at the version DevSpace would otherwise download at deploy time, so the
 # sandbox needs no route to get.helm.sh.

@@ -85,6 +85,8 @@ export const EventData = {
   world_check: WorldCheckResult,
   /** A person wrote to the task from the factory app (also posted where the task lives). */
   message_received: z.object({ author: z.string(), text: z.string(), url: z.string().nullable() }),
+  /** The task waited for a workspace slot (admission control); `position` is its place in line. */
+  queued: z.object({ position: z.number().int().positive(), slots: z.number().int().positive() }),
   /** A person approved the PR (GitHub review or the app). */
   review_approved: z.object({ by: z.string(), headSha: z.string().nullable(), via: z.enum(["github", "app"]) }),
 } as const;
