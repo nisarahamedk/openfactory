@@ -95,6 +95,11 @@ export class FactoryApi implements LedgerReader {
   }
 
   /** Try a failed or stopped task again. */
+  /** Approve the task's PR as `by`. Doesn't merge; it never starts a review round. */
+  approve(id: TaskId, input: { by: string; note?: string }): Promise<TaskRecord> {
+    return this.call("POST", `/v1/tasks/${id}/approve`, oneOf(TaskRecord, "task"), input);
+  }
+
   retry(id: TaskId, input: { by?: string } = {}): Promise<TaskRecord> {
     return this.call("POST", `/v1/tasks/${id}/retry`, oneOf(TaskRecord, "task"), input);
   }

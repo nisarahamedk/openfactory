@@ -124,6 +124,9 @@ export const MergeRisk = z.object({
 });
 export type MergeRisk = z.infer<typeof MergeRisk>;
 
+/** Approvals a PR needs at each merge risk (CODEOWNERS still applies on GitHub). */
+export const APPROVALS_NEEDED: Record<"low" | "medium" | "high", number> = { low: 1, medium: 1, high: 2 };
+
 export const TaskRecord = z.object({
   id: TaskId,
   factoryVersion: z.string(),
@@ -164,6 +167,8 @@ export const TaskRecord = z.object({
   labels: z.array(z.string()).optional(),
   /** OpenWorld runs of the PR's heads, oldest first. */
   worldChecks: z.array(WorldCheckResult).optional(),
+  /** People who approved the PR, oldest first. An approval names the head it saw; a later push makes it stale. */
+  approvals: z.array(z.object({ by: z.string(), at: z.string(), headSha: z.string().nullable(), via: z.enum(["github", "app"]) })).optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -206,6 +211,8 @@ export const Signal = z.discriminatedUnion("type", [
   }),
   SignalBase.extend({ type: z.literal("pr_merged"), prNumber: z.number().int(), mergeSha: z.string() }),
   SignalBase.extend({ type: z.literal("pr_closed"), prNumber: z.number().int() }),
+  /** A person approved the PR: a GitHub review with state APPROVED, or Approve in the factory app. */
+  SignalBase.extend({ type: z.literal("pr_approved"), prNumber: z.number().int(), headSha: z.string().nullable(), via: z.enum(["github", "app"]) }),
   SignalBase.extend({
     type: z.literal("ci_completed"),
     headSha: z.string(),

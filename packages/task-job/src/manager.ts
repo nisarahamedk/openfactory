@@ -257,6 +257,7 @@ export class TaskJobs {
       case "issue_comment":
         return (await l.findByPr(signal.repo, signal.issueNumber)) ?? (await l.findByIssue(signal.repo, signal.issueNumber));
       case "pr_review_comment":
+      case "pr_approved":
       case "pr_merged":
       case "pr_closed":
         return l.findByPr(signal.repo, signal.prNumber);
@@ -355,6 +356,11 @@ export class TaskJobs {
           def: t.Finalize,
           input: { taskId: task.id, outcome: action.outcome, detail: action.mergeSha ? `merge ${action.mergeSha}` : "closed", at: signal.at },
         }));
+        return { ...action, taskId: task.id };
+      }
+      case "record_approval": {
+        if (!task || signal.type !== "pr_approved") return action;
+        await l.append(task.id, "review_approved", { by: signal.actor.login, headSha: signal.headSha ?? task.pr?.headSha ?? null, via: signal.via }, { dedupeKey: `signal:${signal.id}` });
         return { ...action, taskId: task.id };
       }
       case "record_ci": {

@@ -351,6 +351,20 @@ export function createDashboard(
     return c.html(await page(c, { title: `Session · ${t.title}`, nav: "tasks", flash: null }, <TranscriptPage t={t} turn={Number.isFinite(turn) ? turn : null} lines={parseTranscript(body)} />));
   });
 
+  app.post("/tasks/:id/approve", async (c) => {
+    const id = TaskId.parse(c.req.param("id"));
+    const by = viewerOf(c);
+    if (!by) return c.redirect(`/signin?back=/tasks/${id}`, 303);
+    try {
+      const t = await api.approve(id, { by });
+      const n = new Set((t.approvals ?? []).map((a) => a.by)).size;
+      return c.redirect(msg(`/tasks/${id}`, `Approved. ${n} approval${n === 1 ? "" : "s"} so far; merging stays on GitHub.`), 303);
+    } catch (err) {
+      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(`/tasks/${id}`, `Couldn't approve: ${err.message}`), 303);
+      throw err;
+    }
+  });
+
   app.post("/tasks/:id/retry", async (c) => {
     const id = TaskId.parse(c.req.param("id"));
     const back = typeof (await c.req.parseBody()).back === "string" ? "/" : `/tasks/${id}`;

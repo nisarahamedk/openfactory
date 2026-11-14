@@ -27,6 +27,7 @@ export type Action =
   | { kind: "foreman_reply"; body: string }
   | { kind: "finalize"; outcome: "merged" | "closed"; mergeSha?: string }
   | { kind: "record_ci" }
+  | { kind: "record_approval" }
   | { kind: "retry"; body: string }
   | { kind: "ignore"; reason: string };
 
@@ -79,6 +80,11 @@ export function decide(task: TaskRecord | null, signal: Signal, cfg: RulesConfig
 
     case "ci_completed":
       return task ? { kind: "record_ci" } : { kind: "ignore", reason: "no task" };
+
+    // An approval is not a request to change anything: it never starts a review round.
+    case "pr_approved":
+      if (!task || isTerminal(task.status)) return { kind: "ignore", reason: "no live task" };
+      return { kind: "record_approval" };
   }
 }
 

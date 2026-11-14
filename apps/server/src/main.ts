@@ -331,6 +331,17 @@ async function main() {
     return { task: (await ledger.getTask(id))!, url };
   };
 
+  /** A person approves the PR from the app (or Slack/Teams via the org intake): post it on the PR and record it. */
+  const approve = async (id: TaskId, by: string, note?: string) => {
+    const t = await ledger.getTask(id);
+    if (!t) return null;
+    if (!t.pr || (t.status !== "awaiting_review" && t.status !== "iterating")) throw new Error(`task is ${t.status}; only a PR in review can be approved`);
+    const head = t.pr.headSha;
+    await chat.post({ repo: t.source.repo, issueOrPr: t.pr.number }, `**${mention(by)}** approved${head ? ` \`${head.slice(0, 7)}\`` : ""} in the factory app.${note ? `\n\n${note}` : ""}`);
+    await onSignal({ type: "pr_approved", id: `app-approve:${id}:${by}:${head ?? "nohead"}`, repo: t.source.repo, at: new Date().toISOString(), actor: { login: by, isBot: false }, prNumber: t.pr.number, headSha: head, via: "app" });
+    return ledger.getTask(id);
+  };
+
   /** A person asks for a task in the app: open a labelled issue where the work belongs, then start it. */
   const ask = async (input: { ask: string; repo: string | null; requestedBy: string; origin?: { label: string; url: string | null } | null; labels?: string[]; team?: string | null }) => {
     const known = cfg.repos.map((r) => `${r.owner}/${r.name}`);
@@ -376,6 +387,7 @@ async function main() {
     factory: factoryInfo,
     cancel: (id, by, reason) => onCancel(id, by, reason),
     retry: (id, by) => onRetry(id, by),
+    approve,
     health: () => health.current(),
     onSignal,
     evidence,

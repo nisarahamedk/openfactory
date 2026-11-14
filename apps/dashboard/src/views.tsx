@@ -1,5 +1,5 @@
 import type { Child } from "hono/jsx";
-import type { BenchmarkTask, Evidence, LedgerEvent, Team, TaskRecord, TaskStatus } from "@openfactory/contracts";
+import { APPROVALS_NEEDED, type BenchmarkTask, type Evidence, type LedgerEvent, type Team, type TaskRecord, type TaskStatus } from "@openfactory/contracts";
 import type { BenchRun } from "@openfactory/bench";
 import type { FactoryInfo, FactoryView } from "@openfactory/client";
 import { formatDuration, latestScores, scorerDocs } from "@openfactory/scoring";
@@ -531,6 +531,25 @@ export function conversation(t: TaskRecord, events: readonly LedgerEvent[], fact
     .sort((a, b) => a.at.localeCompare(b.at));
 }
 
+/** Who approved, against what the merge risk needs. An approval of an older head is shown as stale. */
+function Approvals({ t }: { t: TaskRecord }) {
+  const all = t.approvals ?? [];
+  if (!all.length) return null;
+  const head = t.pr?.headSha ?? null;
+  const fresh = (a: (typeof all)[number]) => !head || !a.headSha || head.startsWith(a.headSha) || a.headSha.startsWith(head);
+  const people = [...new Set(all.filter(fresh).map((a) => a.by))];
+  const needed = APPROVALS_NEEDED[t.risk?.level ?? "low"];
+  const stale = all.filter((a) => !fresh(a) && !people.includes(a.by));
+  return (
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13.5px">
+      <Badge tone={people.length >= needed ? "good" : "warn"}>{people.length} of {needed} approval{needed === 1 ? "" : "s"}</Badge>
+      {people.map((p) => <span class="pill">{p}</span>)}
+      {stale.length ? <span class="muted">{stale.map((a) => a.by).join(", ")} approved an older head</span> : null}
+      {people.length >= needed ? <span class="t2">Ready to merge on GitHub.</span> : null}
+    </div>
+  );
+}
+
 const RISK_NEEDS: Record<string, string> = { low: "Needs 1 approval.", medium: "Needs 1 approval from someone who knows the area.", high: "Needs 2 approvals, one from CODEOWNERS." };
 
 /** What a reviewer needs before opening the diff: risk, test users already set up, and the checks. */
@@ -547,8 +566,14 @@ function ReviewPanel({ t, facts, team, factory }: { t: TaskRecord; facts: TaskFa
           <h3>{t.status === "awaiting_review" ? "Waiting for your review" : "Review"}</h3>
           <div class="muted" style="font-size:13px;margin-top:2px">{t.pr ? <>PR <a class="link" href={t.pr.url}>#{t.pr.number}</a>{facts.prSize ? `, +${facts.prSize.additions} −${facts.prSize.deletions} in ${facts.prSize.changedFiles} files` : ""}{(t.repos ?? []).length > 1 ? `, and ${t.repos!.length - 1} more repo${t.repos!.length === 2 ? "" : "s"}` : ""}</> : "No PR yet"}</div>
         </div>
-        {t.pr ? <a class="btn primary" href={t.pr.url}><Icon name="pr" />Review on GitHub</a> : null}
+        <div style="display:flex;gap:8px;align-items:center">
+          {t.pr && (t.status === "awaiting_review" || t.status === "iterating") ? (
+            <form method="post" action={`/tasks/${t.id}/approve`} style="margin:0"><button class="btn" type="submit"><Icon name="check" />Approve</button></form>
+          ) : null}
+          {t.pr ? <a class="btn primary" href={t.pr.url}><Icon name="pr" />Review on GitHub</a> : null}
+        </div>
       </div>
+      <Approvals t={t} />
       <div class="split" style="margin:14px -22px -20px;border-top:1px solid var(--rule)">
         <div>
           <div class="muted" style="font-size:12.5px">Merge risk</div>

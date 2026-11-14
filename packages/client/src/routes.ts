@@ -50,6 +50,8 @@ export const CancelTask = z.object({ by: z.string().max(100).optional(), reason:
 
 /** Body of POST /v1/tasks/{id}/retry. */
 export const RetryTask = z.object({ by: z.string().max(100).optional() }).meta({ id: "RetryTask" });
+/** Body of POST /v1/tasks/{id}/approve. */
+export const ApproveTask = z.object({ by: z.string().min(1).max(100), note: z.string().max(2000).optional() }).meta({ id: "ApproveTask" });
 
 /** GET /v1/health: whether the factory is set up so a task can succeed. */
 export const HealthReport = z
@@ -205,6 +207,14 @@ export const V1_ROUTES: RouteSpec[] = [
     summary: "Try a failed or stopped task again: from intake when it has no PR, else as a review round that carries on",
     body: RetryTask,
     responses: { 200: { description: "The task after the retry was scheduled", schema: z.object({ task: TaskRecord }) }, ...bad, ...notFound },
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/approve",
+    operationId: "approveTask",
+    summary: "Approve the task's PR as a person. Recorded on the task and posted on the PR; it never starts a review round, and merging stays a person's call",
+    body: ApproveTask,
+    responses: { 200: { description: "The task with the approval recorded", schema: z.object({ task: TaskRecord }) }, ...bad, ...notFound },
   },
   {
     method: "get",

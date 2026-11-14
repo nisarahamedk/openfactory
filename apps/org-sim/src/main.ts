@@ -114,6 +114,7 @@ async function review() {
     if (task.status !== "awaiting_review") continue;
     // After a change request, the next time the task is back in review (and has moved since), it's approved.
     if (st.reviewed[key] === "changes" && Date.parse(task.updatedAt) > Date.parse(st.asks[key]?.changedAt ?? task.updatedAt) + 60_000) {
+      await api.approve(task.id, { by: reviewerFor(task.requestedBy ?? ""), note: "Thanks, that covers it." });
       st.reviewed[key] = "approved";
       save(st);
       log(`${key}: approved after the change`);
@@ -126,8 +127,9 @@ async function review() {
     const text = change
       ? "Close. Please use the owner's locale for the date (Intl.DateTimeFormat with the browser locale) rather than a fixed en-GB format, and add the cancelled case to the e2e check."
       : "Looks right, and the screenshots match the ask. Approving; ship it.";
-    // The factory has no "approve" message: any comment is a request to iterate, and approval is the merge.
+    // A change request is a message (it starts a review round); an approval is the Approve action, which never does.
     if (change) await api.postMessage(task.id, { author: who, text });
+    else await api.approve(task.id, { by: who, note: text });
     st.reviewed[key] = change ? "changes" : "approved";
     if (change && st.asks[key]) st.asks[key]!.changedAt = new Date().toISOString();
     save(st);
