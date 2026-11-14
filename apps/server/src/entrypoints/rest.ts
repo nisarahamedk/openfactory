@@ -77,6 +77,8 @@ function router(core: Core) {
     joinOrg: os.joinOrg.handler(call("joinOrg")),
     saveTeam: os.saveTeam.handler(call("saveTeam")),
     saveFactory: os.saveFactory.handler(call("saveFactory")),
+    getFactoryFiles: os.getFactoryFiles.handler(call("getFactoryFiles")),
+    proposeFactoryFiles: os.proposeFactoryFiles.handler(call("proposeFactoryFiles")),
     connectSource: os.connectSource.handler(call("connectSource")),
     listEvents: os.listEvents.handler(call("listEvents")),
     listAudit: os.listAudit.handler(call("listAudit")),

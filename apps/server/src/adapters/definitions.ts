@@ -1,89 +1,138 @@
 /**
- * Factories as code on GitHub. Each team factory is one file, `<dir>/<slug>.yaml`, in the definitions repo,
- * in the same shape as a `factories:` entry in factory.yaml. Saving in the app opens a pull request; the sync
- * copies the default branch into OrgStore, so a definition takes effect once its PR is merged.
+ * Factories as code on GitHub. Each factory is a folder `<dir>/<slug>/` in the definitions repo (format:
+ * factory-folder.ts). Changes made through the API open one pull request with one commit; the sync reads the
+ * default branch, so a folder becomes a new factory version once its PR is merged.
  */
 import { OrgFactory, type RepoRef } from "@openfactory/contracts";
 import type { DefinitionRepo, OrgStore, Proposed } from "@openfactory/core";
 import type { GitHubClient } from "@openfactory/github";
-import { parse, stringify } from "yaml";
+import { parseDocument } from "yaml";
+import { readFolder, resolveFolders, type FactoryFolder } from "./factory-folder.js";
 
 export type DefinitionsConfig = { repo: RepoRef; branch: string; dir: string };
+type Gh = Pick<GitHubClient, "request">;
+type Tree = { tree: Array<{ path: string; type: string; sha: string }>; truncated: boolean };
 
-/** The file body: everything but the slug (the file name) and who made it (git history has that). */
-const FileBody = OrgFactory.omit({ slug: true, createdBy: true, createdAt: true });
+/** JSON with keys sorted at every level, so two equal records compare equal whatever order they were written in. */
+const canonical = (v: unknown): string =>
+  Array.isArray(v) ? `[${v.map(canonical).join(",")}]` : v !== null && typeof v === "object" ? `{${Object.entries(v).sort(([a], [b]) => a.localeCompare(b)).map(([k, x]) => `${JSON.stringify(k)}:${canonical(x)}`).join(",")}}` : JSON.stringify(v);
 
-const notFound = (e: unknown) => e instanceof Error && / → 404:/.test(e.message);
-const toBase64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 200);
 
-/** The YAML a definition is written as. */
-export function definitionFile(def: OrgFactory): string {
-  const body = FileBody.parse(def);
-  return `# Team factory "${def.slug}". Changes go through pull requests; the factory picks this up once merged.\n${stringify(body)}`;
+/** Reads folders off the default branch, keeping blobs by sha so a repeated read only fetches what changed. */
+export class DefinitionsReader {
+  private readonly blobs = new Map<string, string>();
+  constructor(
+    private readonly gh: Gh,
+    readonly cfg: DefinitionsConfig,
+  ) {}
+
+  private get base() {
+    return `/repos/${this.cfg.repo.owner}/${this.cfg.repo.name}`;
+  }
+
+  /** Every folder under the definitions dir, slug → path → content. */
+  async folders(): Promise<Record<string, Record<string, string>>> {
+    const tree = await this.gh.request<Tree>("GET", `${this.base}/git/trees/${encodeURIComponent(this.cfg.branch)}?recursive=1`);
+    if (tree.truncated) throw new Error("the definitions repo's tree is too large for one read; keep it to factory folders");
+    const prefix = `${this.cfg.dir}/`;
+    const out: Record<string, Record<string, string>> = {};
+    for (const item of tree.tree) {
+      if (item.type !== "blob" || !item.path.startsWith(prefix)) continue;
+      const [slug, ...rest] = item.path.slice(prefix.length).split("/");
+      if (!slug || rest.length === 0 || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(slug)) continue;
+      let text = this.blobs.get(item.sha);
+      if (text === undefined) {
+        const blob = await this.gh.request<{ content: string }>("GET", `${this.base}/git/blobs/${item.sha}`);
+        text = Buffer.from(blob.content, "base64").toString("utf8");
+        this.blobs.set(item.sha, text);
+      }
+      (out[slug] ??= {})[rest.join("/")] = text;
+    }
+    return out;
+  }
 }
 
-export function githubDefinitions(gh: Pick<GitHubClient, "request">, cfg: DefinitionsConfig, now: () => string = () => new Date().toISOString()): DefinitionRepo {
+export function githubDefinitions(gh: Gh, cfg: DefinitionsConfig, now: () => string = () => new Date().toISOString()): DefinitionRepo {
   const base = `/repos/${cfg.repo.owner}/${cfg.repo.name}`;
   const where = `${cfg.repo.owner}/${cfg.repo.name}`;
+  const reader = new DefinitionsReader(gh, cfg);
+
+  /** One branch, one commit with every change, one pull request. */
+  async function propose(slug: string, changes: Record<string, string | null>, by: string, title: string): Promise<Proposed> {
+    const branch = `factory/${slug}-${now().replace(/[^0-9]/g, "").slice(0, 14)}`;
+    try {
+      const head = await gh.request<{ object: { sha: string } }>("GET", `${base}/git/ref/heads/${encodeURIComponent(cfg.branch)}`);
+      const commit = await gh.request<{ tree: { sha: string } }>("GET", `${base}/git/commits/${head.object.sha}`);
+      const tree = await gh.request<{ sha: string }>("POST", `${base}/git/trees`, {
+        base_tree: commit.tree.sha,
+        tree: Object.entries(changes).map(([path, content]) => ({ path: `${cfg.dir}/${slug}/${path}`, mode: "100644", type: "blob", ...(content === null ? { sha: null } : { content }) })),
+      });
+      const made = await gh.request<{ sha: string }>("POST", `${base}/git/commits`, { message: title, tree: tree.sha, parents: [head.object.sha] });
+      await gh.request("POST", `${base}/git/refs`, { ref: `refs/heads/${branch}`, sha: made.sha });
+      const pr = await gh.request<{ number: number; html_url: string }>("POST", `${base}/pulls`, {
+        title,
+        head: branch,
+        base: cfg.branch,
+        body: `Proposed in the factory by ${by}. Once merged, the factory reads \`${cfg.dir}/${slug}/\` as a new version; set it live or as a candidate under Factories > Versions.`,
+      });
+      return { ok: true, number: pr.number, url: pr.html_url };
+    } catch (e) {
+      return { ok: false, reason: message(e) };
+    }
+  }
+
   return {
     where: () => where,
-    async proposeFactory(def, by): Promise<Proposed> {
-      const path = `${cfg.dir}/${def.slug}.yaml`;
-      const branch = `factory/${def.slug}-${now().replace(/[^0-9]/g, "").slice(0, 14)}`;
+    async files(slug) {
       try {
-        const head = await gh.request<{ object: { sha: string } }>("GET", `${base}/git/ref/heads/${encodeURIComponent(cfg.branch)}`);
-        await gh.request("POST", `${base}/git/refs`, { ref: `refs/heads/${branch}`, sha: head.object.sha });
-        const existing = await gh.request<{ sha: string }>("GET", `${base}/contents/${path}?ref=${encodeURIComponent(cfg.branch)}`).catch((e: unknown) => {
-          if (notFound(e)) return null;
-          throw e;
-        });
-        await gh.request("PUT", `${base}/contents/${path}`, {
-          message: `${existing ? "Change" : "Add"} the ${def.slug} team factory`,
-          content: toBase64(definitionFile(def)),
-          branch,
-          ...(existing ? { sha: existing.sha } : {}),
-        });
-        const pr = await gh.request<{ number: number; html_url: string }>("POST", `${base}/pulls`, {
-          title: `${existing ? "Change" : "Add"} the ${def.slug} team factory`,
-          head: branch,
-          base: cfg.branch,
-          body: `Proposed in the factory app by ${by}. The factory uses this definition for new tasks once this is merged.`,
-        });
-        return { ok: true, number: pr.number, url: pr.html_url };
+        return { ok: true, files: (await reader.folders())[slug] ?? null };
       } catch (e) {
-        return { ok: false, reason: e instanceof Error ? e.message.slice(0, 200) : String(e) };
+        return { ok: false, reason: message(e) };
       }
     },
+    async proposeFactory(def, by) {
+      // Only the settings change: the rest of factory.yaml (comments, models, effort, label) stays as written.
+      let current: string | undefined;
+      try {
+        current = (await reader.folders())[def.slug]?.["factory.yaml"];
+      } catch (e) {
+        return { ok: false, reason: message(e) };
+      }
+      const doc = parseDocument(current ?? `# The ${def.slug} factory. See docs/architecture.md for the folder format.\n`);
+      const { slug: _slug, createdBy: _by, createdAt: _at, ...settings } = def;
+      for (const [k, v] of Object.entries(settings)) doc.set(k, v);
+      return propose(def.slug, { "factory.yaml": doc.toString() }, by, `${current === undefined ? "Add" : "Change"} the ${def.slug} factory`);
+    },
+    proposeFiles: propose,
   };
 }
 
+export type SyncResult = { factories: string[]; versions: FactoryFolder["version"][]; problems: Record<string, string[]> };
+
 /**
- * Copy the definitions on the default branch into OrgStore. Returns the slugs it wrote. A file that doesn't
- * parse is skipped and reported, so one bad file never hides the others.
+ * Read every folder on the default branch: write changed factories into OrgStore and return every version, so
+ * the caller can register them. A folder with problems is skipped and reported, never hiding the others.
  */
-export async function syncDefinitions(gh: Pick<GitHubClient, "request">, cfg: DefinitionsConfig, org: Pick<OrgStore, "factories" | "putFactory">, now: () => string, log: (m: string, f?: object) => void): Promise<string[]> {
-  const base = `/repos/${cfg.repo.owner}/${cfg.repo.name}`;
-  const ref = encodeURIComponent(cfg.branch);
-  const files = await gh.request<Array<{ name: string; path: string; type: string }>>("GET", `${base}/contents/${cfg.dir}?ref=${ref}`).catch((e: unknown) => {
-    if (notFound(e)) return [];
-    throw e;
-  });
+export async function syncDefinitions(reader: Pick<DefinitionsReader, "folders">, org: Pick<OrgStore, "factories" | "putFactory">, now: () => string): Promise<SyncResult> {
+  const resolved = resolveFolders(await reader.folders());
   const known = new Map((await org.factories()).map((f) => [f.slug, f]));
-  const wrote: string[] = [];
-  for (const f of files) {
-    const slug = /^([a-z0-9][a-z0-9-]{0,39})\.ya?ml$/.exec(f.name)?.[1];
-    if (f.type !== "file" || !slug || slug === "default") continue;
-    const file = await gh.request<{ content: string }>("GET", `${base}/contents/${f.path}?ref=${ref}`);
-    const body = FileBody.safeParse(parse(Buffer.from(file.content, "base64").toString("utf8")) ?? {});
-    if (!body.success) {
-      log("factory definition skipped", { path: f.path, error: body.error.message.slice(0, 300) });
+  const out: SyncResult = { factories: [], versions: [], problems: {} };
+  for (const [slug, files] of Object.entries(resolved)) {
+    const r = readFolder(slug, files);
+    if (!r.ok) {
+      out.problems[slug] = r.problems;
       continue;
     }
+    out.versions.push(r.folder.version);
+    // The org default is factory.yaml's; its folder only contributes a version.
+    if (slug === "default") continue;
     const prev = known.get(slug);
-    const next = OrgFactory.parse({ ...body.data, slug, createdBy: prev?.createdBy ?? null, createdAt: prev?.createdAt ?? now() });
-    if (prev && JSON.stringify(FileBody.parse(prev)) === JSON.stringify(body.data)) continue;
+    const next = OrgFactory.parse({ ...r.folder.factory, createdBy: prev?.createdBy ?? null, createdAt: prev?.createdAt ?? now() });
+    const same = prev && canonical({ ...prev, createdBy: null, createdAt: "" }) === canonical({ ...next, createdBy: null, createdAt: "" });
+    if (same) continue;
     await org.putFactory(next);
-    wrote.push(slug);
+    out.factories.push(slug);
   }
-  return wrote;
+  return out;
 }

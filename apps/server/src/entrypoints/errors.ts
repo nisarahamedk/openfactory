@@ -22,6 +22,7 @@ export function statusOf(code: ErrorCode): 400 | 403 | 404 | 409 | 422 | 502 {
     case "TASK_NOT_REVIEWABLE":
     case "TASK_BUSY":
     case "TASK_NOT_MERGED":
+    case "DEFINITIONS_NOT_IN_GIT":
       return 409;
     case "NO_HIDDEN_CHECK":
       return 422;

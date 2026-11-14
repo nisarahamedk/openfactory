@@ -17,7 +17,7 @@ import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
 import { admitted, applyBundle, bundleMcp, promptTemplates, WorkSlots, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps } from "@openfactory/task-job";
 import { auditLog, benchPort, githubCodeHost, ledgerTasks, queuedRunner } from "./adapters/core.js";
-import { githubDefinitions, syncDefinitions } from "./adapters/definitions.js";
+import { DefinitionsReader, githubDefinitions, syncDefinitions } from "./adapters/definitions.js";
 import { fileEvidenceStore } from "./adapters/evidence.js";
 import { createApp } from "./entrypoints/http.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
@@ -124,14 +124,26 @@ async function main() {
   const teamFactories: Record<string, object> = runtimeFactories(await allFactoryDefs());
   // Team factories made in the app take effect on new tasks within a minute.
   const definitions = cfg.definitions ? githubDefinitions(gh, cfg.definitions) : null;
-  /** Merged definitions from the definitions repo into OrgStore (factories as code). */
+  const defsReader = cfg.definitions ? new DefinitionsReader(gh, cfg.definitions) : null;
+  let lastProblems = "";
+  /** Factories as code: merged folders become team factories in OrgStore and versions tasks can run on. */
   const syncDefs = async () => {
-    if (!cfg.definitions) return;
-    const wrote = await syncDefinitions(gh, cfg.definitions, orgStore, () => new Date().toISOString(), log).catch((e) => {
+    if (!defsReader) return;
+    try {
+      const r = await syncDefinitions(defsReader, orgStore, () => new Date().toISOString());
+      for (const v of r.versions) {
+        extras.versionBundles[v.id] = v.bundle;
+        if (v.prompt) extras.versionPrompts[v.id] = v.prompt;
+        if (v.models) extras.versionModels[v.id] = v.models;
+        if (v.label) extras.versionLabels[v.id] = v.label;
+      }
+      if (r.factories.length > 0) log("factory definitions synced", { factories: r.factories });
+      const problems = JSON.stringify(r.problems);
+      if (problems !== lastProblems && problems !== "{}") log("factory definitions skipped", { problems: r.problems });
+      lastProblems = problems;
+    } catch (e) {
       log("factory definitions sync failed", { error: String(e) });
-      return [];
-    });
-    if (wrote.length > 0) log("factory definitions synced", { factories: wrote });
+    }
   };
   await syncDefs();
   Object.assign(teamFactories, runtimeFactories(await allFactoryDefs()));

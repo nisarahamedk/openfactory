@@ -20,7 +20,8 @@ export type FactoryError =
   | { code: "BENCHMARKS_NOT_SET_UP"; message: string }
   | { code: "BENCHMARK_TASK_NOT_FOUND"; message: string; benchmarkTaskId: string }
   | { code: "RUN_NOT_FOUND"; message: string; runId: string }
-  | { code: "CODE_HOST_UNAVAILABLE"; message: string; repo: string };
+  | { code: "CODE_HOST_UNAVAILABLE"; message: string; repo: string }
+  | { code: "DEFINITIONS_NOT_IN_GIT"; message: string };
 
 /** Every error code. */
 export type ErrorCode = FactoryError["code"];
@@ -57,6 +58,7 @@ export function retryable(e: FactoryError): boolean {
     case "BENCHMARKS_NOT_SET_UP":
     case "BENCHMARK_TASK_NOT_FOUND":
     case "RUN_NOT_FOUND":
+    case "DEFINITIONS_NOT_IN_GIT":
       return false;
     default: {
       const never: never = e;
@@ -72,6 +74,7 @@ export function details(e: FactoryError): Record<string, unknown> {
 }
 
 export const errors = {
+  notInGit: (): FactoryError => ({ code: "DEFINITIONS_NOT_IN_GIT", message: "Factory definitions aren't kept in git on this factory. An admin sets FACTORY_DEFINITIONS_REPO to turn that on." }),
   taskNotFound: (taskId: string): FactoryError => ({ code: "TASK_NOT_FOUND", taskId, message: `Task ${taskId} was not found. Check the id (listTasks shows every task) and try again.` }),
   invalid: (message: string, fields: { path: string; message: string }[] = []): FactoryError => ({ code: "INVALID_REQUEST", message, fields }),
   factoryNotFound: (factory: string): FactoryError => ({ code: "FACTORY_NOT_FOUND", factory, message: `There is no factory "${factory}". listFactories shows the org default and every team factory.` }),

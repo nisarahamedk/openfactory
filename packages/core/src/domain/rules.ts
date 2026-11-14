@@ -120,3 +120,13 @@ export function setupSteps(s: Omit<OrgState, "setup" | "replies">, taskCount: nu
     { key: "first_task", title: "Run a first task", done: taskCount > 0, detail: taskCount ? `${taskCount} task${taskCount === 1 ? "" : "s"} so far` : "Ask in Slack, Teams, Jira or the app.", href: "/tasks/new" },
   ];
 }
+
+/**
+ * Why a path can't be a file in a factory's folder, or null when it can. Paths are relative and plain, so a
+ * proposal can never write outside the folder.
+ */
+export function factoryFileProblem(path: string): string | null {
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$/.test(path)) return "must be a relative path of letters, digits, '.', '-', '_' and '/'";
+  if (path.split("/").some((part) => part === "." || part === "..")) return "can't contain . or .. segments";
+  return null;
+}

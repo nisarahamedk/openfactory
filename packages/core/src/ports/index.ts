@@ -124,15 +124,19 @@ export interface FactoryCatalog {
 export type Proposed = { ok: true; number: number; url: string } | { ok: false; reason: string };
 
 /**
- * Factory definitions as code: a git repo that holds each team factory as a file. The app proposes changes as
- * pull requests; a definition takes effect when the PR merges and the server syncs it into OrgStore.
+ * Factories as code: a git repo where each factory is a folder (factory.yaml, AGENTS.md, skills/, mcp.json,
+ * agents/). The app proposes changes as pull requests; a merged folder becomes a new factory version.
  * Rollout state (live, candidate, share) is not here: it stays a database record, like a deploy.
  */
 export interface DefinitionRepo {
   /** Where definitions live, as owner/name, for messages. */
   where(): string;
-  /** Open a pull request that writes this factory's definition. */
+  /** The factory's folder on the default branch, path → content; `files` is null when there's no folder. */
+  files(slug: string): Promise<{ ok: true; files: Record<string, string> | null } | { ok: false; reason: string }>;
+  /** Open a pull request that writes this factory's settings into its factory.yaml, keeping everything else. */
   proposeFactory(def: OrgFactory, by: string): Promise<Proposed>;
+  /** Open a pull request that writes (string) or deletes (null) files in the factory's folder. */
+  proposeFiles(slug: string, changes: Record<string, string | null>, by: string, title: string): Promise<Proposed>;
 }
 
 /** The latest start-up checks. */

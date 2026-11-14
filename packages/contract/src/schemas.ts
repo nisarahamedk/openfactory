@@ -155,6 +155,19 @@ export const SaveOrgTeam = OrgTeam.omit({ createdBy: true, createdAt: true }).ex
 export const Proposal = z.object({ number: z.number().int(), url: z.string() }).meta({ id: "Proposal" });
 export type Proposal = z.infer<typeof Proposal>;
 
+/** A file in a factory's folder, by its path inside the folder (e.g. AGENTS.md, skills/pricing/SKILL.md). */
+export const FactoryFile = z.object({ path: z.string().min(1).max(200), content: z.string().max(200_000) }).meta({ id: "FactoryFile" });
+export type FactoryFile = z.infer<typeof FactoryFile>;
+
+/** Change files in a factory's folder through a pull request; `content: null` deletes the file. */
+export const ProposeFactoryFiles = z
+  .object({
+    files: z.array(z.object({ path: FactoryFile.shape.path, content: FactoryFile.shape.content.nullable() })).min(1).max(50),
+    title: z.string().min(1).max(200).nullable().default(null),
+    by,
+  })
+  .meta({ id: "ProposeFactoryFiles" });
+
 export const SaveOrgFactory = OrgFactory.omit({ createdBy: true, createdAt: true }).extend({ by }).meta({ id: "SaveOrgFactory" });
 /** Body of POST /v1/org/sources. */
 export const ConnectOrgSource = ConnectedSource.omit({ connectedBy: true, connectedAt: true }).extend({ by }).meta({ id: "ConnectOrgSource" });

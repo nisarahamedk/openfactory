@@ -26,7 +26,9 @@ import {
   NewTaskRequest,
   PostMessage,
   RetryTask,
+  FactoryFile,
   Proposal,
+  ProposeFactoryFiles,
   SaveOrgFactory,
   SaveOrgTeam,
   SaveView,
@@ -168,6 +170,14 @@ export const contract = {
     .input(SaveOrgFactory)
     // With a definitions repo, `proposal` is the pull request that makes the change; null when saved directly.
     .output(z.object({ factory: OrgFactory, proposal: Proposal.nullable() })),
+  getFactoryFiles: oc
+    .route({ method: "GET", path: "/org/factories/{slug}/files", summary: "Read a factory's folder (factory.yaml, AGENTS.md, skills, mcp.json, agents) from the definitions repo", tags: ["org"] })
+    .input(z.object({ slug }))
+    .output(z.object({ repo: z.string(), files: z.array(FactoryFile) })),
+  proposeFactoryFiles: oc
+    .route({ method: "POST", path: "/org/factories/{slug}/files", summary: "Propose changes to files in a factory's folder as a pull request; they apply once merged", tags: ["org"] })
+    .input(ProposeFactoryFiles.extend({ slug }))
+    .output(z.object({ proposal: Proposal })),
   connectSource: oc
     .route({ method: "POST", path: "/org/sources", summary: "Connect a tool whose CloudEvents start work or report outcomes (Slack, Microsoft Teams, Jira, Datadog, Rootly, PagerDuty, any CDEvents producer)", tags: ["org"] })
     .input(ConnectOrgSource)

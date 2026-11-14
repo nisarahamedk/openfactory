@@ -70,20 +70,37 @@ Signal plumbing doesn't count as an action, so it skips the registry. The GitHub
 
 ## Factories as code
 
-Decided by Nisar on 2026-11-14.
+Decided by Nisar on 2026-11-14: definitions live in git, rollout state stays in the database.
 
-Team factory definitions live in git, so every change is reviewed, diffable and revertible like code. Each definition is `factories/<slug>.yaml` in the definitions repo, in the same shape as a `factories:` entry in factory.yaml.
+A factory is a folder in the definitions repo (`FACTORY_DEFINITIONS_REPO`), and the folder is the whole bundle the agent gets:
 
-- **Saving**: when `FACTORY_DEFINITIONS_REPO=owner/name` is set, `saveFactory` (in the app, REST or MCP) opens a pull request there and returns it as `proposal`. Nothing changes until the PR is merged. If the code host fails, the call returns `CODE_HOST_UNAVAILABLE` (502, retryable).
-- **Syncing**: the server copies the default branch's definitions into the database at start-up and every minute. New tasks pick them up from there.
-- **Without a definitions repo**, definitions are saved straight to the database. Local dev and simulated orgs work this way.
-- **Rollout state** stays a database record, like a deploy: which version is live, the candidate and its share. It must apply instantly, and the audit log records who changed it.
+```
+factories/<slug>/
+  factory.yaml            extends, description, scorers, benchmarks, world, mergeRisk,
+                          plus the version's label, models (routing), effort, codegraph
+  AGENTS.md               extra guidance (written as CLAUDE.local.md in the checkout)
+  skills/<name>/SKILL.md  skills, with name and description frontmatter
+  mcp.json                MCP servers, in the standard { "mcpServers": { ... } } shape
+  agents/worker.md        extra system prompt for the worker agent
+```
 
-The core sees a `DefinitionRepo` port. The GitHub adapter is `apps/server/src/adapters/definitions.ts`.
+- **Inheritance**: a folder `extends` another, `default` unless it says otherwise. Inheritance works file by file, and factory.yaml merges key by key, so a team folder only holds what it changes.
+- **Versions**: the version is the content hash of the resolved folder, for example `fv_payments_3f2a9c1b0d`. The same files always give the same version, and any change gives a new one.
+- **Changing**: `proposeFactoryFiles` writes or deletes any files in a folder as one commit on a new branch, with a pull request. `saveFactory` changes only the settings in factory.yaml and keeps comments and every other key. `getFactoryFiles` reads a folder. All three are on REST and MCP.
+- **Syncing**: the server reads the default branch at start-up and every minute.
+  - Each team folder becomes a team factory.
+  - Each folder's version becomes runnable. Make it live or a candidate with the rollout, as before.
+  - A folder with problems, such as bad YAML, a skill without frontmatter or invalid mcp.json, is skipped. Its problems are logged, and the other folders still load.
+- **Rollout state** is not in git: which version is live, the candidate and its share. It changes like a deploy, applies instantly, and the audit log records who changed it.
+- **Without a definitions repo**, team factory settings are saved straight to the database and versions come from factory.yaml's `versions:` block, as before. Local dev and the simulated org work this way.
 
-Not yet covered:
-- Deleting a definition file doesn't remove the factory.
-- Factory versions (prompts, skills, routing) are still built from factory.yaml.
+The core sees a `DefinitionRepo` port. The format is in `apps/server/src/adapters/factory-folder.ts` and the GitHub adapter is in `definitions.ts`.
+
+Not covered yet:
+- Deleting a folder doesn't remove the factory.
+- Foreman prompts aren't read from `agents/`.
+- Models first named in a synced version aren't in the start-up health check, or in `TASK_KEY_MODELS` unless listed there.
+- The app has no file editor yet; edit files through the API, MCP, or GitHub.
 
 ## Deviations and follow-ups
 

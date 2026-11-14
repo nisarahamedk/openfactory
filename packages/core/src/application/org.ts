@@ -1,7 +1,7 @@
 import { ConnectedSource, DEFAULT_ROLE, OrgFactory, OrgTeam, Person, TaskId, type CloudEvent, type Intake, type IntakeResult, type OrgState, type RepoRef, type TaskMatch, type TaskRecord } from "@openfactory/contracts";
 import { personFor, type Actor } from "../domain/actor.js";
 import { errors, fail } from "../domain/errors.js";
-import { setupSteps } from "../domain/rules.js";
+import { factoryFileProblem, setupSteps } from "../domain/rules.js";
 import type { CoreDeps } from "../ports/index.js";
 import type { Registry } from "./capability.js";
 import { ask } from "./tasks.js";
@@ -27,7 +27,7 @@ export async function orgState(deps: CoreDeps): Promise<OrgState> {
 }
 
 /** Org setup. Admins change it; a person may mark themselves joined. */
-export const orgCapabilities: Pick<Registry, "getOrg" | "setOrg" | "connectRepo" | "invitePerson" | "joinOrg" | "saveTeam" | "saveFactory" | "connectSource" | "listEvents"> = {
+export const orgCapabilities: Pick<Registry, "getOrg" | "setOrg" | "connectRepo" | "invitePerson" | "joinOrg" | "saveTeam" | "saveFactory" | "getFactoryFiles" | "proposeFactoryFiles" | "connectSource" | "listEvents"> = {
   getOrg: { audience: "viewer", risk: "read", mcp: true, target: null, run: async ({ deps }) => ({ org: await orgState(deps) }) },
   setOrg: {
     audience: "admin",
@@ -120,6 +120,42 @@ export const orgCapabilities: Pick<Registry, "getOrg" | "setOrg" | "connectRepo"
       const r = await deps.definitions.proposeFactory(factory, who);
       if (!r.ok) fail({ code: "CODE_HOST_UNAVAILABLE", repo: deps.definitions.where(), message: `Couldn't open a pull request in ${deps.definitions.where()}: ${r.reason}. Try again in a moment.` });
       return { factory, proposal: { number: r.number, url: r.url } };
+    },
+  },
+  getFactoryFiles: {
+    audience: "engineer",
+    risk: "read",
+    mcp: true,
+    target: (i) => `factory:${i.slug}`,
+    run: async ({ deps }, i) => {
+      if (deps.definitions === null) fail(errors.notInGit());
+      const r = await deps.definitions.files(i.slug);
+      if (!r.ok) fail({ code: "CODE_HOST_UNAVAILABLE", repo: deps.definitions.where(), message: `Couldn't read ${deps.definitions.where()}: ${r.reason}. Try again in a moment.` });
+      if (r.files === null) fail(errors.factoryNotFound(i.slug));
+      const files = Object.entries(r.files)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([path, content]) => ({ path, content }));
+      return { repo: deps.definitions.where(), files };
+    },
+  },
+  proposeFactoryFiles: {
+    audience: "admin",
+    risk: "external",
+    mcp: true,
+    target: (i) => `factory:${i.slug}`,
+    run: async ({ deps, actor }, i) => {
+      if (deps.definitions === null) fail(errors.notInGit());
+      const bad = i.files.flatMap((f, n) => {
+        const problem = factoryFileProblem(f.path);
+        return problem ? [{ path: `files.${n}.path`, message: problem }] : [];
+      });
+      if (bad.length > 0) fail(errors.invalid(`A file path ${bad[0]?.message}.`, bad));
+      if (new Set(i.files.map((f) => f.path)).size !== i.files.length) fail(errors.invalid("Each file may appear once.", [{ path: "files", message: "duplicate path" }]));
+      const changes = Object.fromEntries(i.files.map((f) => [f.path, f.content]));
+      const title = i.title ?? `Change the ${i.slug} factory: ${i.files.map((f) => f.path).join(", ").slice(0, 120)}`;
+      const r = await deps.definitions.proposeFiles(i.slug, changes, personFor(actor, i.by), title);
+      if (!r.ok) fail({ code: "CODE_HOST_UNAVAILABLE", repo: deps.definitions.where(), message: `Couldn't open a pull request in ${deps.definitions.where()}: ${r.reason}. Try again in a moment.` });
+      return { proposal: { number: r.number, url: r.url } };
     },
   },
   connectSource: {

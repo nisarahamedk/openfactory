@@ -34,7 +34,7 @@ const SERVED_BEFORE = [
 describe("the contract", () => {
   it("keeps every path clients already use, and adds only new ones", () => {
     const served = Object.values(contract).map((p) => `${p["~orpc"].route.method?.toLowerCase()} ${p["~orpc"].route.path}`);
-    expect(served.filter((r) => !SERVED_BEFORE.includes(r))).toEqual(["get /audit"]);
+    expect(served.filter((r) => !SERVED_BEFORE.includes(r))).toEqual(["get /org/factories/{slug}/files", "post /org/factories/{slug}/files", "get /audit"]);
     expect(SERVED_BEFORE.filter((r) => !served.includes(r))).toEqual([]);
   });
 

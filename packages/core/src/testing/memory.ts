@@ -219,18 +219,29 @@ export const testFactoryInfo: FactoryInfo = {
 };
 
 /** Core deps backed by memory, with every store exposed for assertions. */
-/** A definitions repo that keeps proposed pull requests in memory; `down` makes the code host refuse. */
+/** A definitions repo in memory: folders by slug, and the pull requests proposed; `down` makes the code host refuse. */
 export class MemoryDefinitions implements DefinitionRepo {
-  readonly proposed: { def: OrgFactory; by: string; number: number }[] = [];
+  readonly folders = new Map<string, Record<string, string>>();
+  readonly proposed: { slug: string; def: OrgFactory | null; changes: Record<string, string | null>; by: string; title: string; number: number }[] = [];
   down = false;
   where(): string {
     return "acme/factory";
   }
-  async proposeFactory(def: OrgFactory, by: string): Promise<Proposed> {
+  async files(slug: string): Promise<{ ok: true; files: Record<string, string> | null } | { ok: false; reason: string }> {
+    if (this.down) return { ok: false, reason: "GitHub answered 503" };
+    return { ok: true, files: this.folders.get(slug) ?? null };
+  }
+  private pr(p: Omit<(typeof this.proposed)[number], "number">): Proposed {
     if (this.down) return { ok: false, reason: "GitHub answered 503" };
     const number = this.proposed.length + 1;
-    this.proposed.push({ def, by, number });
+    this.proposed.push({ ...p, number });
     return { ok: true, number, url: `https://github.com/acme/factory/pull/${number}` };
+  }
+  async proposeFactory(def: OrgFactory, by: string): Promise<Proposed> {
+    return this.pr({ slug: def.slug, def, changes: {}, by, title: `Change the ${def.slug} factory` });
+  }
+  async proposeFiles(slug: string, changes: Record<string, string | null>, by: string, title: string): Promise<Proposed> {
+    return this.pr({ slug, def: null, changes, by, title });
   }
 }
 

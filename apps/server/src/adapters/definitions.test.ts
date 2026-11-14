@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { stringify } from "yaml";
 import type { OrgFactory } from "@openfactory/contracts";
-import { definitionFile, githubDefinitions, syncDefinitions, type DefinitionsConfig } from "./definitions.js";
+import { DefinitionsReader, githubDefinitions, syncDefinitions, type DefinitionsConfig } from "./definitions.js";
 
 const cfg: DefinitionsConfig = { repo: { host: "github", owner: "acme", name: "factory" }, branch: "main", dir: "factories" };
 const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
@@ -15,61 +14,87 @@ function fakeGh(routes: Record<string, unknown>) {
       calls.push({ method, path, body });
       const key = `${method} ${path}`;
       if (!(key in routes)) throw new Error(`GitHub ${method} ${path} → 404: Not Found`);
-      const r = routes[key];
-      if (r instanceof Error) throw r;
       // SAFETY: the fake returns whatever the test put in `routes` for this call; each test shapes it as the real API does.
       // Verified by: the assertions below on what the adapter does with each answer.
-      return r as T;
+      return routes[key] as T;
     },
   };
 }
 
+/** A repo with these files on main, served through the trees and blobs APIs. */
+function repo(files: Record<string, string>, extra: Record<string, unknown> = {}) {
+  const entries = Object.entries(files).map(([path, content], i) => ({ path, type: "blob", sha: `s${i}`, content }));
+  return fakeGh({
+    "GET /repos/acme/factory/git/trees/main?recursive=1": { truncated: false, tree: [{ path: "factories", type: "tree", sha: "t" }, ...entries.map(({ path, type, sha }) => ({ path, type, sha }))] },
+    ...Object.fromEntries(entries.map((e) => [`GET /repos/acme/factory/git/blobs/${e.sha}`, { content: b64(e.content) }])),
+    ...extra,
+  });
+}
+
 const payments: OrgFactory = { slug: "payments", extends: "default", description: "Money rules", scorers: ["ledger-balances"], benchmarks: [], world: "payments-30d", mergeRisk: null, createdBy: "ada", createdAt: "t" };
+const writes = {
+  "GET /repos/acme/factory/git/ref/heads/main": { object: { sha: "c1" } },
+  "GET /repos/acme/factory/git/commits/c1": { tree: { sha: "tree1" } },
+  "POST /repos/acme/factory/git/trees": { sha: "tree2" },
+  "POST /repos/acme/factory/git/commits": { sha: "c2" },
+  "POST /repos/acme/factory/git/refs": {},
+  "POST /repos/acme/factory/pulls": { number: 7, html_url: "https://github.com/acme/factory/pull/7" },
+};
 
 describe("factory definitions on GitHub", () => {
-  it("proposes a new definition as a branch, a file and a pull request", async () => {
-    const gh = fakeGh({
-      "GET /repos/acme/factory/git/ref/heads/main": { object: { sha: "abc" } },
-      "POST /repos/acme/factory/git/refs": {},
-      "PUT /repos/acme/factory/contents/factories/payments.yaml": {},
-      "POST /repos/acme/factory/pulls": { number: 7, html_url: "https://github.com/acme/factory/pull/7" },
-    });
-    const r = await githubDefinitions(gh, cfg, () => "2026-11-14T03:50:00.000Z").proposeFactory(payments, "ada");
+  it("reads a factory's folder", async () => {
+    const gh = repo({ "factories/payments/factory.yaml": "scorers: []\n", "factories/payments/skills/a/SKILL.md": "x", "README.md": "not a factory" });
+    expect(await githubDefinitions(gh, cfg).files("payments")).toEqual({ ok: true, files: { "factory.yaml": "scorers: []\n", "skills/a/SKILL.md": "x" } });
+    expect(await githubDefinitions(gh, cfg).files("growth")).toEqual({ ok: true, files: null });
+  });
+
+  it("proposes file changes as one commit on a new branch and a pull request", async () => {
+    const gh = repo({}, writes);
+    const r = await githubDefinitions(gh, cfg, () => "2026-11-14T03:50:00.000Z").proposeFiles("payments", { "AGENTS.md": "Keep it small.", "skills/old/SKILL.md": null }, "ada", "Change payments");
     expect(r).toEqual({ ok: true, number: 7, url: "https://github.com/acme/factory/pull/7" });
-    expect(gh.calls.find((c) => c.method === "POST" && c.path.endsWith("/git/refs"))?.body).toEqual({ ref: "refs/heads/factory/payments-20261114035000", sha: "abc" });
-    const put = gh.calls.find((c) => c.method === "PUT")?.body as { content: string; sha?: string };
-    expect(put.sha).toBeUndefined();
-    expect(Buffer.from(put.content, "base64").toString()).toContain("world: payments-30d");
-    expect(Buffer.from(put.content, "base64").toString()).not.toContain("createdBy");
+    expect(gh.calls.find((c) => c.path.endsWith("/git/trees"))?.body).toEqual({
+      base_tree: "tree1",
+      tree: [
+        { path: "factories/payments/AGENTS.md", mode: "100644", type: "blob", content: "Keep it small." },
+        { path: "factories/payments/skills/old/SKILL.md", mode: "100644", type: "blob", sha: null },
+      ],
+    });
+    expect(gh.calls.find((c) => c.path.endsWith("/git/refs"))?.body).toEqual({ ref: "refs/heads/factory/payments-20261114035000", sha: "c2" });
+  });
+
+  it("changes only the settings in factory.yaml, keeping comments and other keys", async () => {
+    const gh = repo({ "factories/payments/factory.yaml": "# owned by payments\nlabel: v3\nscorers: []\n" }, writes);
+    await githubDefinitions(gh, cfg).proposeFactory(payments, "ada");
+    const yaml = (gh.calls.find((c) => c.path.endsWith("/git/trees"))?.body as { tree: { content: string }[] }).tree[0]?.content ?? "";
+    expect(yaml).toContain("# owned by payments");
+    expect(yaml).toContain("label: v3");
+    expect(yaml).toContain("- ledger-balances");
+    expect(yaml).not.toContain("createdBy");
   });
 
   it("reports a code host failure as a value", async () => {
-    const r = await githubDefinitions(fakeGh({}), cfg).proposeFactory(payments, "ada");
-    expect(r.ok).toBe(false);
+    expect((await githubDefinitions(fakeGh({}), cfg).proposeFiles("p", { "AGENTS.md": "x" }, "ada", "t")).ok).toBe(false);
+    expect((await githubDefinitions(fakeGh({}), cfg).files("p")).ok).toBe(false);
   });
 
-  it("syncs merged files into the org store, skipping bad and unchanged ones", async () => {
-    const stored: OrgFactory[] = [{ ...payments, slug: "growth", world: null, description: null, scorers: [] }];
+  it("syncs merged folders: factories into the org store, every version back, broken folders reported", async () => {
+    const stored: OrgFactory[] = [];
     const org = { factories: async () => stored, putFactory: async (f: OrgFactory) => (stored.push(f), f) };
-    const logged: string[] = [];
-    const gh = fakeGh({
-      "GET /repos/acme/factory/contents/factories?ref=main": [
-        { name: "payments.yaml", path: "factories/payments.yaml", type: "file" },
-        { name: "growth.yaml", path: "factories/growth.yaml", type: "file" },
-        { name: "broken.yaml", path: "factories/broken.yaml", type: "file" },
-        { name: "README.md", path: "factories/README.md", type: "file" },
-      ],
-      "GET /repos/acme/factory/contents/factories/payments.yaml?ref=main": { content: b64(definitionFile(payments)) },
-      "GET /repos/acme/factory/contents/factories/growth.yaml?ref=main": { content: b64(stringify({ extends: "default", description: null, scorers: [], benchmarks: [], world: null, mergeRisk: null })) },
-      "GET /repos/acme/factory/contents/factories/broken.yaml?ref=main": { content: b64("scorers: not-a-list\n") },
-    });
-    const wrote = await syncDefinitions(gh, cfg, org, () => "now", (m) => logged.push(m));
-    expect(wrote).toEqual(["payments"]);
-    expect(stored.find((f) => f.slug === "payments")).toMatchObject({ world: "payments-30d", scorers: ["ledger-balances"], createdBy: null, createdAt: "now" });
-    expect(logged).toEqual(["factory definition skipped"]);
-  });
-
-  it("treats a missing definitions folder as no definitions", async () => {
-    expect(await syncDefinitions(fakeGh({}), cfg, { factories: async () => [], putFactory: async (f) => f }, () => "now", () => {})).toEqual([]);
+    const reader = new DefinitionsReader(
+      repo({
+        "factories/default/AGENTS.md": "org rules",
+        "factories/payments/factory.yaml": "description: Money rules\nworld: payments-30d\n",
+        "factories/broken/factory.yaml": "scorers: nope\n",
+      }),
+      cfg,
+    );
+    const r = await syncDefinitions(reader, org, () => "now");
+    expect(r.factories).toEqual(["payments"]);
+    expect(r.versions.map((v) => v.id.replace(/_[0-9a-f]+$/, ""))).toEqual(["fv_default", "fv_payments"]);
+    expect(r.versions[1]?.bundle.agentsMd).toBe("org rules");
+    expect(Object.keys(r.problems)).toEqual(["broken"]);
+    expect(stored[0]).toMatchObject({ slug: "payments", world: "payments-30d", createdAt: "now" });
+    // Nothing changed: nothing written again.
+    expect((await syncDefinitions(reader, org, () => "later")).factories).toEqual([]);
   });
 });

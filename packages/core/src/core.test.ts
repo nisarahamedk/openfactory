@@ -146,6 +146,24 @@ describe("task rules", () => {
     expect((await direct.execute("saveFactory", user("ada"), input)).proposal).toBeNull();
   });
 
+  it("factories as code: a factory is a folder; files are read and changed through pull requests", async () => {
+    const definitions = new MemoryDefinitions();
+    definitions.folders.set("payments", { "factory.yaml": "extends: default\n", "AGENTS.md": "Keep PRs small.\n" });
+    const core = createCore(memoryDeps({ definitions }).deps);
+    const read = await core.execute("getFactoryFiles", user("ada"), { slug: "payments" });
+    expect(read.files.map((f) => f.path)).toEqual(["AGENTS.md", "factory.yaml"]);
+    expect(await code(core.execute("getFactoryFiles", user("ada"), { slug: "nope" }))).toBe("FACTORY_NOT_FOUND");
+    const skill = { path: "skills/refunds/SKILL.md", content: "---\nname: refunds\ndescription: How refunds work\n---\nUse the ledger." };
+    const r = await core.execute("proposeFactoryFiles", user("ada"), { slug: "payments", files: [skill, { path: "AGENTS.md", content: null }], title: null });
+    expect(r.proposal.number).toBe(1);
+    expect(definitions.proposed[0]).toMatchObject({ slug: "payments", by: "ada", changes: { "skills/refunds/SKILL.md": skill.content, "AGENTS.md": null } });
+    for (const path of ["../secrets", "/etc/passwd", "skills/../../x", ".github/workflows/x.yml"])
+      expect(await code(core.execute("proposeFactoryFiles", user("ada"), { slug: "payments", files: [{ path, content: "x" }], title: null }))).toBe("INVALID_REQUEST");
+    // Without a definitions repo there is no folder to read or change.
+    const plain = createCore(memoryDeps().deps);
+    expect(await code(plain.execute("getFactoryFiles", user("ada"), { slug: "payments" }))).toBe("DEFINITIONS_NOT_IN_GIT");
+  });
+
   it("egress: unknown tasks are skipped and a repeated window counts once", async () => {
     const m = await withPeople();
     const core = createCore(m.deps);
