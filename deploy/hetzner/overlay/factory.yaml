@@ -1,0 +1,8 @@
+# The live factory's factory.yaml (docs/plugins.md). Providers and models fall back to the server env.
+world:
+  provider: openworld
+  name: firstword-30d
+  simDays: 30
+  options:
+    url: http://openworld.openworld.svc:8080
+    timeoutMs: 2700000

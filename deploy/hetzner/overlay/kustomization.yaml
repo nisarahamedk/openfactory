@@ -11,6 +11,12 @@ images:
   - name: ghcr.io/nisarahamedk/openfactory
     newName: openfactory
     newTag: d9242bc
+configMapGenerator:
+  - name: factory-file
+    namespace: factory
+    files: [factory.yaml]
+generatorOptions:
+  disableNameSuffixHash: true
 patches:
   - target: { kind: Ingress, name: factory }
     patch: |-
@@ -79,3 +85,19 @@ patches:
             containers:
               - name: server
                 env: [{ name: MODEL_PROXY_URL, value: "http://litellm.factory.svc:4000" }]
+  # factory.yaml (world check) and the OpenWorld runner token.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: openfactory, namespace: factory }
+      spec:
+        template:
+          spec:
+            containers:
+              - name: server
+                env:
+                  - { name: FACTORY_FILE, value: /etc/openfactory/factory.yaml }
+                  - name: OPENWORLD_TOKEN
+                    valueFrom: { secretKeyRef: { name: openworld, key: OPENWORLD_TOKEN, optional: true } }
+                volumeMounts: [{ name: factory-file, mountPath: /etc/openfactory }]
+            volumes: [{ name: factory-file, configMap: { name: factory-file } }]
