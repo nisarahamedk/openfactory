@@ -45,8 +45,9 @@ spec:
             - { name: MODEL_PROXY_URL, value: "http://litellm.factory.svc:4000" }
             - { name: FOREMAN_MODEL, value: claude-haiku }
             - { name: WORKER_MODEL, value: claude-haiku }
+            # The env deploy (devspace dev) never exits: start it in the background and wait for the URL.
             - name: BENCH_CHECK_JSON
-              value: '{"testFilePattern":"^tests/[^/]+\\.test\\.ts$","run":["pnpm","test"],"filter":"delete-others","testDir":"tests","testSuffix":".test.ts","world":{"testFilePattern":"^tests/e2e/.+\\.spec\\.ts$","run":"STAGE_URL=\"$FACTORY_ENV_URL\" pnpm exec playwright test"}}'
+              value: '{"testFilePattern":"^tests/[^/]+\\.test\\.ts$","run":["pnpm","test"],"filter":"delete-others","testDir":"tests","testSuffix":".test.ts","world":{"testFilePattern":"^tests/e2e/.+\\.spec\\.ts$","run":"STAGE_URL=\"$FACTORY_ENV_URL\" pnpm exec playwright test","deploy":"(eval \"$FACTORY_ENV_DEPLOY\" > \"$HOME/deploy.log\" 2>&1 &); factory-evidence wait --timeout 900 || { tail -40 \"$HOME/deploy.log\"; exit 1; }"}}'
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: postgres, key: POSTGRES_PASSWORD } }
             - { name: DATABASE_URL, value: "postgres://factory:$(POSTGRES_PASSWORD)@postgres.factory.svc:5432/acme" }

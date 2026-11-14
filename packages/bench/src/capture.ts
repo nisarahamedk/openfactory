@@ -84,6 +84,9 @@ export async function captureBenchmarkTask(
     check = { kind: "tests_from_merged_pr", command: deps.options.checkCommand(tests.map((t) => t.path)), files, world };
   } else if (deps.options.fallbackCheckCommand !== null) {
     check = { kind: "command", command: deps.options.fallbackCheckCommand, files: {}, world };
+  } else if (world !== null) {
+    // Only e2e tests changed (a UI task): the world check is the whole check; the repo part has nothing to run.
+    check = { kind: "command", command: ["true"], files: {}, world };
   } else {
     throw new CaptureError("NO_CHECK", `PR #${record.pr.number} changed no test files and no fallback check command is set`);
   }

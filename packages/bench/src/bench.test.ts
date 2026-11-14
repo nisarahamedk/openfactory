@@ -300,6 +300,27 @@ describe("world check", () => {
     return env;
   }
 
+  it("a PR that only changed e2e tests (a UI task) becomes a world-only benchmark", async () => {
+    const { captureOptionsFrom, parseCheckSpec } = await import("./index.js");
+    const { base } = makeOrigin();
+    const prs: PullRequestSource = {
+      mergedPullRequest: async () => ({
+        baseSha: base,
+        mergeSha: "m",
+        files: [
+          { path: "add.js", status: "modified", contentAtMerge: "module.exports = (a, b) => a + b;\n" },
+          { path: "tests/e2e/add.spec.js", status: "added", contentAtMerge: WORLD_TEST },
+        ],
+      }),
+    };
+    const spec = parseCheckSpec(
+      JSON.stringify({ testFilePattern: "^tests/.+\\.test\\.js$", run: ["node"], filter: "append-files", world: { testFilePattern: "^tests/e2e/", run: "node" } }),
+    );
+    const task = await captureBenchmarkTask("task_abc", { ledger: ledgerWith(mergedRecord()), prs, options: captureOptionsFrom(spec), now: "n" });
+    expect(task.check.command).toEqual(["true"]);
+    expect(Object.keys(task.check.world?.files ?? {})).toEqual(["tests/e2e/add.spec.js"]);
+  });
+
   it("capture keeps world tests out of the repo check; replay deploys and runs them in a fresh env", async () => {
     const { captureOptionsFrom, parseCheckSpec } = await import("./index.js");
     const spec = parseCheckSpec(
