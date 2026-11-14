@@ -141,7 +141,7 @@ export function loadOutcomeConfig(env: Record<string, string | undefined>, path?
   };
 }
 
-const Routing = z.object({
+export const Routing = z.object({
   default: z.string().min(1),
   routes: z.array(z.object({ model: z.string().min(1), labels: z.array(z.string()).optional(), keywords: z.array(z.string()).optional() })).default([]),
 });

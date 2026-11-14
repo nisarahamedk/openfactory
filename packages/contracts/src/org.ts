@@ -8,6 +8,7 @@
  * each into an ask, a signal, an outcome or nothing, and the result is kept beside the raw event.
  */
 import { z } from "zod";
+import type { Outcome } from "./index.js";
 
 /** The six people the app is designed for. A persona picks a person's home page; it never limits access. */
 export const Persona = z.enum(["engineer", "em", "director", "factory_engineer", "platform_director", "vp"]);
@@ -234,3 +235,43 @@ export const InboundEvent = z.object({
   result: IntakeResult,
 });
 export type InboundEvent = z.infer<typeof InboundEvent>;
+
+// ───────────────────────────── translating inbound events ─────────────────────────────
+
+/** Who in a tool did it. The server maps it to a person by identity, then by email. */
+export type ToolActor = { kind: SourceKind; id: string | null; email: string | null; name: string | null };
+
+/** Which task an outcome belongs to. Any one field can match. */
+export type TaskMatch = { taskId?: string; repo?: string; prNumber?: number; sha?: string };
+
+export type Intake =
+  | {
+      kind: "ask";
+      ask: string;
+      actor: ToolActor;
+      /** The channel, project or service the ask came from: the source's `routes` map it to a team. */
+      place: string | null;
+      origin: { label: string; url: string | null };
+      labels: string[];
+      /** Where to answer: Slack ts, Teams activity (with conversation and service URL), Jira key. */
+      reply: { thread: string | null; conversation: string | null; serviceUrl: string | null };
+    }
+  | { kind: "merge"; repo: string; prNumber: number; at: string }
+  | { kind: "close"; repo: string; prNumber: number; at: string }
+  | { kind: "outcome"; match: TaskMatch; outcome: Pick<Outcome, "kind" | "detail" | "at">; ref: string }
+  | { kind: "ignore"; reason: string };
+
+export type TranslateContext = {
+  /** The label that means "the factory should do this" (Jira labels, Datadog tags). */
+  factoryLabel: string;
+  /** The connected source the event came from, if any. */
+  source: ConnectedSource | null;
+  now: string;
+};
+
+/** Reads a tool's CloudEvents and says what each means for the factory (implemented by @openfactory/cloudevents). */
+export interface EventTranslator {
+  /** The kind of tool an event comes from: the connected source's kind, else the event type's namespace. */
+  kindOf(ev: CloudEvent, source: ConnectedSource | null): SourceKind | null;
+  translate(ev: CloudEvent, ctx: TranslateContext): Intake;
+}

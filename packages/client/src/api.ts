@@ -1,13 +1,18 @@
 import { z } from "zod";
 import { BenchmarkTask, ConnectedSource, InboundEvent, OrgFactory, OrgState, OrgTeam, Person, LedgerEvent, RolloutState, SavedView, TaskRecord, Team, type LedgerReader, type TaskId, type TaskStatus, type ViewShare } from "@openfactory/contracts";
 import { BenchRun } from "@openfactory/bench";
-import { FactoryInfo, FactoryView, HealthReport } from "./routes.js";
+import { FactoryInfo, FactoryView, HealthReport, Proposal } from "@openfactory/contract";
 
 export interface FactoryApiConfig {
   baseUrl: string;
   /** Bearer token for the factory server, or null if it has no auth. */
   token: string | null;
   fetch?: typeof fetch;
+  /**
+   * The person this client acts for, sent as X-Factory-Actor. Only a trusted client that signed the person in
+   * (the factory app) sets it; the server then applies that person's org role and records them as the actor.
+   */
+  actor?: string | null;
 }
 
 /** A failed call to the factory server; `status` is the HTTP status (0 when unreachable). */
@@ -21,6 +26,9 @@ export class FactoryApiError extends Error {
 function listOf<T extends z.ZodType>(item: T, key: string) {
   return z.union([z.array(item), z.object({ [key]: z.array(item) }).transform((o) => o[key] as z.infer<T>[])]);
 }
+/** saveFactory's answer: the factory, and the pull request when definitions live in git. */
+const SavedFactory = z.object({ factory: OrgFactory, proposal: Proposal.nullable().default(null) });
+
 function oneOf<T extends z.ZodType>(item: T, key: string) {
   return z.union([z.object({ [key]: item }).transform((o) => o[key] as z.infer<T>), item]);
 }
@@ -29,10 +37,16 @@ function oneOf<T extends z.ZodType>(item: T, key: string) {
 export class FactoryApi implements LedgerReader {
   constructor(private readonly cfg: FactoryApiConfig) {}
 
+  /** The same client, acting for `login` (see FactoryApiConfig.actor). */
+  actingAs(login: string): FactoryApi {
+    return new FactoryApi({ ...this.cfg, actor: login });
+  }
+
   private async call<T>(method: "GET" | "POST", path: string, schema: z.ZodType<T>, body: unknown = null): Promise<T> {
     const f = this.cfg.fetch ?? fetch;
     const headers: Record<string, string> = { accept: "application/json" };
     if (this.cfg.token !== null) headers.authorization = `Bearer ${this.cfg.token}`;
+    if (this.cfg.actor) headers["x-factory-actor"] = this.cfg.actor;
     if (body !== null) headers["content-type"] = "application/json";
     let res: Response;
     try {
@@ -197,8 +211,9 @@ export class FactoryApi implements LedgerReader {
     return this.call("POST", "/v1/org/teams", oneOf(OrgTeam, "team"), input);
   }
 
-  saveFactory(input: Partial<Omit<OrgFactory, "createdBy" | "createdAt">> & { slug: string; by: string }): Promise<OrgFactory> {
-    return this.call("POST", "/v1/org/factories", oneOf(OrgFactory, "factory"), input);
+  /** With a definitions repo, `proposal` is the pull request that makes the change (it applies once merged). */
+  saveFactory(input: Partial<Omit<OrgFactory, "createdBy" | "createdAt">> & { slug: string; by: string }): Promise<{ factory: OrgFactory; proposal: Proposal | null }> {
+    return this.call("POST", "/v1/org/factories", SavedFactory, input);
   }
 
   connectSource(input: Omit<ConnectedSource, "connectedBy" | "connectedAt" | "routes" | "reply"> & { routes?: Record<string, string>; reply?: Partial<ConnectedSource["reply"]> & { mode: ConnectedSource["reply"]["mode"] }; by: string }): Promise<ConnectedSource> {

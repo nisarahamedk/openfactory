@@ -5,3 +5,4 @@ export { AppStore, APP_MIGRATION } from "./app-store.js";
 export { MIGRATIONS, runMigrations, type Migration } from "./migrations.js";
 export { JobLog, LeaseLost, type Lease, type LoggedCommit } from "./job-log.js";
 export { OrgStore, ORG_MIGRATION } from "./org-store.js";
+export { AuditStore, AUDIT_MIGRATION, type AuditRow } from "./audit-store.js";

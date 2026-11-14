@@ -13,6 +13,13 @@ const Env = z.object({
   /** factory.yaml with `providers:`; env vars below fill anything it leaves out. */
   FACTORY_FILE: z.string().optional(),
   FACTORY_LABEL: z.string().default("factory"),
+  /**
+   * Factories as code: "owner/name" of the repo holding team factory definitions. Saving a factory in the app
+   * opens a PR there, and merged definitions are synced every minute. Unset = saved straight to the database.
+   */
+  FACTORY_DEFINITIONS_REPO: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
+  FACTORY_DEFINITIONS_BRANCH: z.string().default("main"),
+  FACTORY_DEFINITIONS_DIR: z.string().regex(/^[\w./-]+$/).default("factories"),
   FACTORY_REPOS: z.string(), // "owner/name,owner/name"
   BASE_BRANCH: z.string().default("main"),
   BOT_LOGINS: z.string().default(""),
@@ -55,7 +62,7 @@ const Env = z.object({
   /** How the repo runs a chosen set of test files (packages/bench CheckSpec, JSON). Unset = vitest with file args. */
   BENCH_CHECK_JSON: z.string().optional(),
 });
-export type Config = z.infer<typeof Env> & { repos: RepoRef[]; agentEnv: Record<string, string> };
+export type Config = z.infer<typeof Env> & { repos: RepoRef[]; agentEnv: Record<string, string>; definitions: { repo: RepoRef; branch: string; dir: string } | null };
 
 export function loadConfig(env: Record<string, string | undefined>): Config {
   const c = Env.parse(env);
@@ -69,5 +76,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       return RepoRef.parse({ host: "github", owner, name });
     });
   const agentEnv = z.record(z.string(), z.string()).parse(JSON.parse(c.AGENT_ENV_JSON));
-  return { ...c, repos, agentEnv };
+  const [dOwner, dName] = c.FACTORY_DEFINITIONS_REPO?.split("/") ?? [];
+  const definitions = dOwner && dName ? { repo: RepoRef.parse({ host: "github", owner: dOwner, name: dName }), branch: c.FACTORY_DEFINITIONS_BRANCH, dir: c.FACTORY_DEFINITIONS_DIR.replace(/\/+$/, "") } : null;
+  return { ...c, repos, agentEnv, definitions };
 }

@@ -11,6 +11,7 @@ import type { PgDatabase } from "drizzle-orm/pg-core";
 import { APP_MIGRATION } from "./app-store.js";
 import { MIGRATION } from "./store.js";
 import { ORG_MIGRATION } from "./org-store.js";
+import { AUDIT_MIGRATION } from "./audit-store.js";
 
 export type Migration = { version: number; name: string; sql: string };
 
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS of_job_leases (
 );`,
   },
   { version: 5, name: "org setup (people, teams, factories, sources) and inbound events", sql: ORG_MIGRATION },
+  { version: 6, name: "audit log (who changed what, through any surface)", sql: AUDIT_MIGRATION },
 ];
 
 const LOCK_ID = 7_241_001; // any constant; shared by every factory server on this database

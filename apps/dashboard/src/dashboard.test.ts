@@ -243,7 +243,7 @@ describe("dashboard", () => {
         ev("status_changed", "2026-11-13T00:09:00Z", { from: "iterating", to: "awaiting_review" }),
       ],
     });
-    const page = await (await createDashboard(api, { password: null, models: ["a"] }).request("/tasks/task_r")).text();
+    const page = await (await createDashboard(api, { password: null, models: ["a", "b"] }).request("/tasks/task_r")).text();
     expect(page).not.toContain("Stopped by lead");
     expect(page).not.toContain("Last error.");
     expect(page).not.toContain(`class="alert bad"`);
@@ -258,7 +258,7 @@ describe("dashboard", () => {
         ev("status_changed", "2026-11-13T00:02:00Z", { from: "working", to: "failed", reason: "agent turn" }),
       ],
     });
-    const app = createDashboard(api, { password: null, models: ["a"] });
+    const app = createDashboard(api, { password: null, models: ["a", "b"] });
     const page = await (await app.request("/tasks/task_f")).text();
     expect(page).toContain("Stopped by a setup problem.");
     expect(page).toContain("Add claude-sonnet to the gateway key&#39;s models.");
@@ -273,7 +273,7 @@ describe("dashboard", () => {
 
   it("every page warns while a start-up check fails", async () => {
     const { api } = fakeServer([], {}, { at: "t", ok: false, checks: [{ name: "model gateway", ok: false, detail: "unreachable or refused the key: status 401", fix: "Check MODEL_PROXY_KEY." }] });
-    const page = await (await createDashboard(api, { password: null, models: ["a"] }).request("/tasks")).text();
+    const page = await (await createDashboard(api, { password: null, models: ["a", "b"] }).request("/tasks")).text();
     expect(page).toContain("isn&#39;t set up to finish tasks");
     expect(page).toContain("Check MODEL_PROXY_KEY.");
   });

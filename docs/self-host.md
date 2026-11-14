@@ -139,6 +139,7 @@ Everything is in `values.yaml`. The parts you will touch:
 - **`environments.devspace`:** use this when your repos ship a `devspace.yaml`. Set `factory.providers.devEnvironment: devspace` and `appUrlTemplate` (e.g. `https://{namespace}.apps.example.com`, served by a wildcard ingress). To copy secrets the app needs into each task namespace, list them in `copySecrets` as `<namespace>/<name>`.
 - **`litellm.models`:** set the model names, provider models and explicit prices. An explicit price keeps the budget accurate even when LiteLLM's price map doesn't know the model. Add more providers by adding their key Secret under `secrets.modelProviders`.
 - **`limits.maxTaskUsd`:** the cap on each task's model key.
+- **Factories as code:** set the server env `FACTORY_DEFINITIONS_REPO=owner/name` (optionally `FACTORY_DEFINITIONS_BRANCH`, default `main`, and `FACTORY_DEFINITIONS_DIR`, default `factories`). Each factory is then a folder `factories/<slug>/` there (factory.yaml, AGENTS.md, skills/, mcp.json, agents/). Changes from the app, API or MCP open pull requests, and merged folders become runnable versions within a minute. The server's GitHub token needs contents and pull-request write access on that repo. See docs/architecture.md.
 
 ## Production checklist
 

@@ -13,15 +13,18 @@
   "dependencies": {
     "@earendil-works/pi-ai": "1.5.2",
     "@hono/node-server": "1.19.6",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@openfactory/agent-acp": "workspace:*",
     "@openfactory/bench": "workspace:*",
     "@openfactory/client": "workspace:*",
+    "@openfactory/cloudevents": "workspace:*",
+    "@openfactory/contract": "workspace:*",
     "@openfactory/contracts": "workspace:*",
+    "@openfactory/core": "workspace:*",
     "@openfactory/env-devspace": "workspace:*",
     "@openfactory/foreman": "workspace:*",
     "@openfactory/github": "workspace:*",
     "@openfactory/ledger": "workspace:*",
-    "@openfactory/mcp": "workspace:*",
     "@openfactory/metrics-dxfake": "workspace:*",
     "@openfactory/models-litellm": "workspace:*",
     "@openfactory/rules": "workspace:*",
@@ -33,15 +36,15 @@
     "@openfactory/workspace-k8s": "workspace:*",
     "@openfactory/workspace-local": "workspace:*",
     "@openfactory/world-openworld": "workspace:*",
+    "@orpc/openapi": "1.16.1",
+    "@orpc/server": "1.16.1",
     "hono": "4.10.4",
     "yaml": "2.8.1",
-    "zod": "4.1.12",
-    "@openfactory/cloudevents": "workspace:*"
+    "zod": "4.1.12"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.16",
-    "drizzle-orm": "0.45.4",
-    "@modelcontextprotocol/sdk": "1.32.2",
-    "@seriousme/openapi-schema-validator": "2.12.0"
+    "@seriousme/openapi-schema-validator": "2.12.0",
+    "drizzle-orm": "0.45.4"
   }
 }
