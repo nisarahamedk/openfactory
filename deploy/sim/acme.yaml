@@ -42,6 +42,8 @@ spec:
             # 8GB/4-vCPU VM: three awake workspaces (each may burst to 6Gi during installs and typechecks) stalled the node
             # on 2026-11-14 (probes timing out, API 503s, an agent OOM-killed). Two fit; more wait in line.
             - { name: MAX_AWAKE_WORKSPACES, value: "2" }
+            # Cap each workspace so two can never take the whole node (the agent was SIGKILLed by the node OOM killer).
+            - { name: WORKSPACE_MEMORY_LIMIT, value: "3Gi" }
             - { name: MENTIONS, value: "off" }
             - { name: MODEL_PROXY_URL, value: "http://litellm.factory.svc:4000" }
             - { name: FOREMAN_MODEL, value: claude-haiku }
