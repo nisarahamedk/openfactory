@@ -17,6 +17,7 @@ ARG HELM_VERSION=v3.11.1
 ARG HELM_SHA256=0b1be96b66fab4770526f136f5f1a385a47c41923d33aab0dcb500e0f6c1bf7c
 ARG PLAYWRIGHT_VERSION=1.56.1
 ARG GH_VERSION=2.83.0
+ARG CODEGRAPH_VERSION=1.6.2
 ARG GH_SHA256=a5cf6cdb40fc67751adf561126b3314044779cea81ba4f254fbe8e9a69f1676f
 
 # Node 22.21+ so Node's own fetch and https honour the egress proxy variables
@@ -47,7 +48,8 @@ RUN curl -fsSLo /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-am
  && mv /tmp/linux-amd64/helm /usr/local/bin/helm \
  && rm -rf /tmp/helm.tgz /tmp/linux-amd64
 
-RUN npm install -g "pnpm@${PNPM_VERSION}" "@agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}" \
+# CodeGraph: a code index with one MCP tool; factory versions with `codegraph: true` use it to read less.
+RUN npm install -g "pnpm@${PNPM_VERSION}" "@agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}" "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" \
  && npm cache clean --force
 
 # Git identity for the agent's commits. The task job writes a per-task repo

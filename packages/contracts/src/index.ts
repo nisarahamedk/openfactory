@@ -280,6 +280,33 @@ export type AgentUpdate =
   | { kind: "tool_call"; title: string; status: "pending" | "in_progress" | "completed" | "failed" }
   | { kind: "plan"; entries: string[] };
 
+/** A stdio MCP server started inside the workspace (ACP `McpServerStdio`). */
+export const McpServer = z.object({ name: z.string().min(1), command: z.string().min(1), args: z.array(z.string()).default([]), env: z.record(z.string(), z.string()).default({}) });
+export type McpServer = z.infer<typeof McpServer>;
+
+export const Effort = z.enum(["low", "medium", "high", "max"]);
+export type Effort = z.infer<typeof Effort>;
+
+/**
+ * What a factory version gives the agent beyond the base prompts: the parts a factory engineer varies and
+ * A/B tests. Model routing is versioned beside it (factory.yaml `versions.<id>.models`).
+ */
+export const VersionBundle = z.object({
+  /** Extra system-prompt text. */
+  prompt: z.string().optional(),
+  /** Extra AGENTS.md guidance, written to CLAUDE.local.md in the checkout (never committed). */
+  agentsMd: z.string().optional(),
+  /** Skills written to .claude/skills/<name>/SKILL.md in the checkout. */
+  skills: z.array(z.object({ name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/), description: z.string().min(1).max(1024), body: z.string() })).default([]),
+  /** MCP servers for the session. */
+  mcp: z.array(McpServer).default([]),
+  /** Reasoning effort for the agent. */
+  effort: Effort.optional(),
+  /** Index the repo with CodeGraph and give the agent its MCP tool (fewer tokens spent reading files). */
+  codegraph: z.boolean().default(false),
+});
+export type VersionBundle = z.infer<typeof VersionBundle>;
+
 /** A coding agent (Claude Code, Codex, Copilot CLI, Pi...) reached over ACP or natively. */
 export interface AgentHarness {
   readonly name: string; // e.g. "claude-code"
@@ -294,6 +321,10 @@ export interface AgentHarness {
     env?: Record<string, string>;
     /** The task's model, when it differs from the harness default (model routing). */
     model?: string;
+    /** MCP servers the agent gets for this session (the factory version's tools). */
+    mcpServers?: McpServer[];
+    /** Reasoning effort, when the factory version sets one. */
+    effort?: Effort;
   }): Promise<AgentSession>;
 }
 
@@ -679,3 +710,6 @@ export function parseEvidenceKey(key: string): { taskId: string; name: string } 
     return null;
   }
 }
+
+// ───────────────────────────── org setup and inbound events ─────────────────────────────
+export * from "./org.js";

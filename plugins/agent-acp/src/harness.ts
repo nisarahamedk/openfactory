@@ -7,6 +7,8 @@
  */
 import { z } from "zod";
 import type {
+  Effort,
+  McpServer,
   AgentHarness,
   AgentSession,
   AgentUpdate,
@@ -89,6 +91,8 @@ export class AcpHarness implements AgentHarness {
     resumeSessionId: string | null;
     env?: Record<string, string>;
     model?: string;
+    mcpServers?: McpServer[];
+    effort?: Effort;
   }): Promise<AgentSession> {
     // The task's env (per-task proxy key, git token) and model win over the harness defaults.
     const modelEnv = input.model && input.model !== this.model && this.spec.modelEnv ? this.spec.modelEnv(input.model) : {};
@@ -96,7 +100,7 @@ export class AcpHarness implements AgentHarness {
     const peer = new JsonRpcPeer(proc.stdin, proc.stdout, this.spec.log);
     const session = new AcpSession(peer, proc, this.spec);
     peer.start();
-    await session.open(input.cwd, input.systemPrompt, input.resumeSessionId);
+    await session.open(input.cwd, input.systemPrompt, input.resumeSessionId, input.mcpServers ?? [], input.effort ?? null);
     return session;
   }
 }
@@ -138,7 +142,7 @@ class AcpSession implements AgentSession {
     return this.id;
   }
 
-  async open(cwd: string, systemPrompt: string, resumeSessionId: string | null): Promise<void> {
+  async open(cwd: string, systemPrompt: string, resumeSessionId: string | null, mcp: McpServer[] = [], effort: Effort | null = null): Promise<void> {
     const init = InitializeResult.parse(
       await this.peer.request("initialize", {
         protocolVersion: 1,
@@ -147,17 +151,20 @@ class AcpSession implements AgentSession {
       }),
     );
     const prompt = { mode: "append", content: [{ type: "text", text: systemPrompt }] };
+    // ACP McpServerStdio; env as name/value pairs. Effort through the Claude Code adapter's session options.
+    const mcpServers = mcp.map((m) => ({ name: m.name, command: m.command, args: m.args, env: Object.entries(m.env).map(([name, value]) => ({ name, value })) }));
+    const extra = effort ? { _meta: { claudeCode: { options: { effort } } } } : {};
     if (resumeSessionId === null) {
       const created = NewSessionResult.parse(
-        await this.peer.request("session/new", { cwd, mcpServers: [], systemPrompt: prompt }),
+        await this.peer.request("session/new", { cwd, mcpServers, systemPrompt: prompt, ...extra }),
       );
       this.id = created.sessionId;
     } else if (init.agentCapabilities.sessionCapabilities?.resume !== undefined) {
-      await this.peer.request("session/resume", { sessionId: resumeSessionId, cwd, mcpServers: [], systemPrompt: prompt });
+      await this.peer.request("session/resume", { sessionId: resumeSessionId, cwd, mcpServers, systemPrompt: prompt, ...extra });
       this.id = resumeSessionId;
     } else if (init.agentCapabilities.loadSession === true) {
       this.replaying = true;
-      await this.peer.request("session/load", { sessionId: resumeSessionId, cwd, mcpServers: [], systemPrompt: prompt });
+      await this.peer.request("session/load", { sessionId: resumeSessionId, cwd, mcpServers, systemPrompt: prompt, ...extra });
       this.replaying = false;
       this.id = resumeSessionId;
     } else {

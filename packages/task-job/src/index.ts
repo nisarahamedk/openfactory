@@ -6,3 +6,4 @@ export { TaskJobs, TaskBusy, newTaskId, type TaskJobsOptions } from "./manager.j
 export { PostgresJobStorage, type CommitLog } from "./pg-storage.js";
 export { pollOutcomes, watchOutcomes, type OutcomePollResult, type OutcomeWatchDeps, type OutcomeWatchOptions } from "./outcomes.js";
 export { AgentGaveUp, classifyError, SetupError, DEFAULT_RETRY_DELAYS_MS, type ErrorKind } from "./errors.js";
+export { applyBundle, bundleMcp, bundleScript, skillFile } from "./bundle.js";

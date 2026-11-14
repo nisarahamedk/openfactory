@@ -6,12 +6,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { V1_ROUTES } from "@openfactory/client";
 import { createBenchRoutes, defaultCaptureOptions, FileBenchStore } from "@openfactory/bench";
-import { Ledger } from "@openfactory/ledger";
+import { Ledger, OrgStore } from "@openfactory/ledger";
 import { Validator } from "@seriousme/openapi-schema-validator";
 import { drizzle } from "drizzle-orm/pglite";
 import { expect, it } from "vitest";
 import { orgDeps } from "./test-org.js";
 import { createApp, fileEvidenceStore } from "./app.js";
+import { createOrgRoutes } from "./org-api.js";
 
 async function setup() {
   const ledger = new Ledger(drizzle(new PGlite()));
@@ -33,8 +34,12 @@ async function setup() {
     maxCostUsdPerRun: 1,
     now: () => new Date().toISOString(),
   });
+  const orgStore = new OrgStore(drizzle(new PGlite()));
+  await orgStore.migrate();
+  const org = createOrgRoutes({ store: orgStore, ledger, ask: async () => ({ issueUrl: "u", repo: "o/r", issueNumber: 1 }), onSignal: async () => null, addOutcome: async () => true, repos: () => [], factoryLabel: "factory", now: () => "2026-11-14T00:00:00.000Z", log: () => {} });
   const app = createApp({
     ...(await orgDeps()),
+    org,
     ledger,
     onSignal: async () => null,
     evidence: fileEvidenceStore(mkdtempSync(join(tmpdir(), "ev-")), "https://f.example"),

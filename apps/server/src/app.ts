@@ -10,6 +10,7 @@
  *   /v1/...                          benchmark routes (packages/bench)
  *   POST /webhooks/github            GitHub webhooks (optional; polling is the default)
  *   GET  /evidence/:taskId/:file     evidence copied out of sandboxes, linked from PRs
+ *   /v1/org..., /v1/events            org setup and inbound CloudEvents (org-api.ts)
  *   GET  /v1/openapi.json            OpenAPI 3.1 for /v1 (generated from the Zod contracts)
  *   POST /mcp                        the factory's MCP server (Streamable HTTP), same bearer token as /v1
  */
@@ -74,7 +75,9 @@ export type AppDeps = {
   /** Write to a task as a person; null when the task is unknown. */
   message: (taskId: TaskId, author: string, text: string) => Promise<{ task: TaskRecord; url: string | null } | null>;
   /** Ask for a new task from the app; throws a message for the person when it can't. */
-  ask: (input: { ask: string; repo: string | null; requestedBy: string }) => Promise<{ issueUrl: string; repo: string; issueNumber: number }>;
+  ask: (input: { ask: string; repo: string | null; requestedBy: string; origin?: { label: string; url: string | null } | null; labels?: string[] }) => Promise<{ issueUrl: string; repo: string; issueNumber: number }>;
+  /** Org setup and inbound CloudEvents (org-api.ts), mounted under /v1. */
+  org?: Hono | null;
 };
 
 export function createApp(d: AppDeps): Hono {
@@ -213,6 +216,7 @@ export function createApp(d: AppDeps): Hono {
     return c.json({ deleted: await d.store.deleteView(c.req.param("id"), by.by) });
   });
   if (d.bench) v1.route("/", d.bench);
+  if (d.org) v1.route("/", d.org);
   app.route("/v1", v1);
 
   // MCP tools call /v1 in-process with the same token, so they can never do more than the API allows.

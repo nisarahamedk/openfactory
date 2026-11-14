@@ -65,6 +65,9 @@ importers:
       '@openfactory/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@openfactory/cloudevents':
+        specifier: workspace:*
+        version: link:../../plugins/cloudevents
       '@openfactory/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -304,6 +307,15 @@ importers:
       '@openfactory/workspace-local':
         specifier: workspace:*
         version: link:../workspace-local
+
+  plugins/cloudevents:
+    dependencies:
+      '@openfactory/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      zod:
+        specifier: 4.1.12
+        version: 4.1.12
 
   plugins/env-devspace:
     dependencies:

@@ -40,7 +40,7 @@ describe("migrations", () => {
       harness: { name: "h", model: "m" },
     });
 
-    expect(await runMigrations(db)).toEqual([1, 2, 3, 4]);
+    expect(await runMigrations(db)).toEqual([1, 2, 3, 4, 5]);
     expect(await runMigrations(db)).toEqual([]);
     expect((await new Ledger(db).getTask("task_old" as never))?.title).toBe("t");
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BenchmarkTask, LedgerEvent, RolloutState, SavedView, TaskRecord, Team, type LedgerReader, type TaskId, type TaskStatus, type ViewShare } from "@openfactory/contracts";
+import { BenchmarkTask, ConnectedSource, InboundEvent, OrgFactory, OrgState, OrgTeam, Person, LedgerEvent, RolloutState, SavedView, TaskRecord, Team, type LedgerReader, type TaskId, type TaskStatus, type ViewShare } from "@openfactory/contracts";
 import { BenchRun } from "@openfactory/bench";
 import { FactoryInfo, FactoryView, HealthReport } from "./routes.js";
 
@@ -123,7 +123,7 @@ export class FactoryApi implements LedgerReader {
     return res.text();
   }
 
-  createTask(input: { ask: string; repo: string | null; requestedBy: string }): Promise<{ issueUrl: string; repo: string; issueNumber: number }> {
+  createTask(input: { ask: string; repo: string | null; requestedBy: string; origin?: { label: string; url: string | null } | null; labels?: string[] }): Promise<{ issueUrl: string; repo: string; issueNumber: number }> {
     return this.call("POST", "/v1/tasks", z.object({ issueUrl: z.string(), repo: z.string(), issueNumber: z.number().int() }), input);
   }
 
@@ -166,6 +166,45 @@ export class FactoryApi implements LedgerReader {
 
   async deleteView(id: string, by: string): Promise<boolean> {
     return (await this.call("POST", `/v1/views/${encodeURIComponent(id)}/delete`, z.object({ deleted: z.boolean() }), { by })).deleted;
+  }
+
+  org(): Promise<OrgState> {
+    return this.call("GET", "/v1/org", oneOf(OrgState, "org"));
+  }
+
+  setOrg(input: { name: string; by: string; simulated?: boolean }): Promise<OrgState> {
+    return this.call("POST", "/v1/org", oneOf(OrgState, "org"), input);
+  }
+
+  connectRepo(input: { repo: string; by: string }): Promise<OrgState> {
+    return this.call("POST", "/v1/org/repos", oneOf(OrgState, "org"), input);
+  }
+
+  invite(input: { login: string; name?: string | null; email?: string | null; persona: Person["persona"]; role?: Person["role"]; identities?: Person["identities"]; by: string }): Promise<Person> {
+    return this.call("POST", "/v1/org/people", oneOf(Person, "person"), input);
+  }
+
+  join(login: string): Promise<Person> {
+    return this.call("POST", `/v1/org/people/${encodeURIComponent(login)}/join`, oneOf(Person, "person"), {});
+  }
+
+  saveTeam(input: Omit<OrgTeam, "createdBy" | "createdAt" | "description" | "scope"> & { description?: string | null; scope?: OrgTeam["scope"]; by: string }): Promise<OrgTeam> {
+    return this.call("POST", "/v1/org/teams", oneOf(OrgTeam, "team"), input);
+  }
+
+  saveFactory(input: Partial<Omit<OrgFactory, "createdBy" | "createdAt">> & { slug: string; by: string }): Promise<OrgFactory> {
+    return this.call("POST", "/v1/org/factories", oneOf(OrgFactory, "factory"), input);
+  }
+
+  connectSource(input: Omit<ConnectedSource, "connectedBy" | "connectedAt" | "routes"> & { routes?: Record<string, string>; by: string }): Promise<ConnectedSource> {
+    return this.call("POST", "/v1/org/sources", oneOf(ConnectedSource, "source"), input);
+  }
+
+  inboundEvents(opts: { source?: string; limit?: number } = {}): Promise<InboundEvent[]> {
+    const q = new URLSearchParams();
+    if (opts.source) q.set("source", opts.source);
+    if (opts.limit) q.set("limit", String(opts.limit));
+    return this.call("GET", `/v1/events${q.size ? `?${q}` : ""}`, listOf(InboundEvent, "events"));
   }
 
   startBenchRun(input: {

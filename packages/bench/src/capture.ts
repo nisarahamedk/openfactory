@@ -105,6 +105,7 @@ const GhPull = z.object({
   merged: z.boolean(),
   merge_commit_sha: z.string().nullable(),
   base: z.object({ sha: z.string() }),
+  head: z.object({ sha: z.string() }).optional(),
 });
 const GhFiles = z.array(z.object({ filename: z.string(), status: z.string() }));
 
@@ -114,6 +115,11 @@ export class GitHubPullRequestSource implements PullRequestSource {
     private readonly token: () => Promise<string>,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly apiBase = "https://api.github.com",
+    /**
+     * Treat an open PR's head as the accepted change. For simulated orgs where nothing really merges
+     * (the merge comes from a CDEvents change.merged); never for a real org's benchmarks.
+     */
+    private readonly acceptUnmerged = false,
   ) {}
 
   private async get(path: string, accept = "application/vnd.github+json"): Promise<Response> {
@@ -127,8 +133,9 @@ export class GitHubPullRequestSource implements PullRequestSource {
   async mergedPullRequest(repo: RepoRef, number: number): Promise<MergedPullRequest> {
     const base = `/repos/${repo.owner}/${repo.name}`;
     const pull = GhPull.parse(await (await this.get(`${base}/pulls/${number}`)).json());
-    if (!pull.merged || pull.merge_commit_sha === null) throw new CaptureError("TASK_NOT_MERGED", `PR #${number} is not merged`);
-    const mergeSha = pull.merge_commit_sha;
+    const unmergedHead = this.acceptUnmerged && !pull.merged ? (pull.head?.sha ?? null) : null;
+    if (unmergedHead === null && (!pull.merged || pull.merge_commit_sha === null)) throw new CaptureError("TASK_NOT_MERGED", `PR #${number} is not merged`);
+    const mergeSha = unmergedHead ?? pull.merge_commit_sha!;
     const listed: Array<{ filename: string; status: string }> = [];
     for (let page = 1; page <= 30; page++) {
       const batch = GhFiles.parse(await (await this.get(`${base}/pulls/${number}/files?per_page=100&page=${page}`)).json());
