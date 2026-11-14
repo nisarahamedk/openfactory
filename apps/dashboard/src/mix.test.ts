@@ -17,3 +17,9 @@ it("re-weights per-kind results to the live mix and ignores kinds with no live w
   expect(r.cost).toBeCloseTo(0.8 * 0.9 + 0.2 * 0.1);
   expect(reweight(new Map(), new Map(live))).toEqual({ pass: null, cost: null });
 });
+
+it("reads plural tests and AGENTS.md docs from a title", async () => {
+  const { categoryOf } = await import("./mix.js");
+  expect(categoryOf({ title: "Add unit tests for src/lib/format.ts" })).toBe("test");
+  expect(categoryOf({ title: "Docs: add a section to AGENTS.md" })).toBe("docs");
+});

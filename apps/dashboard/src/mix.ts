@@ -23,8 +23,8 @@ const BY_LABEL: Array<[RegExp, Category]> = [
 ];
 const BY_TITLE: Array<[RegExp, Category]> = [
   [/\b(fix|bug|broken|crash|error|wrong|regression)\b/i, "bug"],
-  [/\b(test|e2e|coverage)\b/i, "test"],
-  [/\b(docs?|readme|document)\b/i, "docs"],
+  [/\b(tests?|e2e|coverage)\b/i, "test"],
+  [/\b(docs?|readme|document|agents\.md)\b/i, "docs"],
   [/\b(refactor|clean ?up|rename|extract)\b/i, "refactor"],
   [/\b(bump|upgrade|dependenc|ci|pipeline|build|docker|helm|deploy)\b/i, "infra"],
   [/\b(button|page|style|layout|copy|text|link|colou?r|ui|screen|mobile)\b/i, "ui"],
