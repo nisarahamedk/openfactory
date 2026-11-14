@@ -17,6 +17,7 @@ import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
 import { admitted, applyBundle, bundleMcp, promptTemplates, WorkSlots, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps } from "@openfactory/task-job";
 import { auditLog, benchPort, githubCodeHost, ledgerTasks, queuedRunner } from "./adapters/core.js";
+import { githubDefinitions, syncDefinitions } from "./adapters/definitions.js";
 import { fileEvidenceStore } from "./adapters/evidence.js";
 import { createApp } from "./entrypoints/http.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
@@ -122,8 +123,20 @@ async function main() {
   );
   const teamFactories: Record<string, object> = runtimeFactories(await allFactoryDefs());
   // Team factories made in the app take effect on new tasks within a minute.
+  const definitions = cfg.definitions ? githubDefinitions(gh, cfg.definitions) : null;
+  /** Merged definitions from the definitions repo into OrgStore (factories as code). */
+  const syncDefs = async () => {
+    if (!cfg.definitions) return;
+    const wrote = await syncDefinitions(gh, cfg.definitions, orgStore, () => new Date().toISOString(), log).catch((e) => {
+      log("factory definitions sync failed", { error: String(e) });
+      return [];
+    });
+    if (wrote.length > 0) log("factory definitions synced", { factories: wrote });
+  };
+  await syncDefs();
+  Object.assign(teamFactories, runtimeFactories(await allFactoryDefs()));
   const factoryTimer = setInterval(() => {
-    void allFactoryDefs().then((d) => Object.assign(teamFactories, runtimeFactories(d))).catch(() => {});
+    void syncDefs().then(allFactoryDefs).then((d) => Object.assign(teamFactories, runtimeFactories(d))).catch(() => {});
   }, 60_000);
   factoryTimer.unref();
   const routedModels = [
@@ -334,6 +347,7 @@ async function main() {
     rollouts: store,
     org: orgStore,
     directory,
+    definitions,
     catalog: { info: factoryInfo, factories: async () => factoryViews(await allFactoryDefs(), await allTeams()) },
     health: { report: () => health.current() },
     bench: bench ? benchPort(bench) : null,

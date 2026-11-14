@@ -26,6 +26,7 @@ import {
   NewTaskRequest,
   PostMessage,
   RetryTask,
+  Proposal,
   SaveOrgFactory,
   SaveOrgTeam,
   SaveView,
@@ -165,7 +166,8 @@ export const contract = {
   saveFactory: oc
     .route({ method: "POST", path: "/org/factories", summary: "Create or change a team factory on top of the org default", tags: ["org"] })
     .input(SaveOrgFactory)
-    .output(one("factory", OrgFactory)),
+    // With a definitions repo, `proposal` is the pull request that makes the change; null when saved directly.
+    .output(z.object({ factory: OrgFactory, proposal: Proposal.nullable() })),
   connectSource: oc
     .route({ method: "POST", path: "/org/sources", summary: "Connect a tool whose CloudEvents start work or report outcomes (Slack, Microsoft Teams, Jira, Datadog, Rootly, PagerDuty, any CDEvents producer)", tags: ["org"] })
     .input(ConnectOrgSource)

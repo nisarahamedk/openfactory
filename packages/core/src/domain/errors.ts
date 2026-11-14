@@ -19,7 +19,8 @@ export type FactoryError =
   | { code: "REPO_NOT_CONNECTED"; message: string; repo: string | null }
   | { code: "BENCHMARKS_NOT_SET_UP"; message: string }
   | { code: "BENCHMARK_TASK_NOT_FOUND"; message: string; benchmarkTaskId: string }
-  | { code: "RUN_NOT_FOUND"; message: string; runId: string };
+  | { code: "RUN_NOT_FOUND"; message: string; runId: string }
+  | { code: "CODE_HOST_UNAVAILABLE"; message: string; repo: string };
 
 /** Every error code. */
 export type ErrorCode = FactoryError["code"];
@@ -37,10 +38,11 @@ export function fail(error: FactoryError): never {
   throw new Failure(error);
 }
 
-/** Whether the same call may succeed if repeated unchanged. Truthful per code: only a busy task is. */
+/** Whether the same call may succeed if repeated unchanged. Truthful per code: a busy task, or a code host that failed to answer. */
 export function retryable(e: FactoryError): boolean {
   switch (e.code) {
     case "TASK_BUSY":
+    case "CODE_HOST_UNAVAILABLE":
       return true;
     case "FORBIDDEN":
     case "INVALID_REQUEST":

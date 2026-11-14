@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Actor } from "./domain/actor.js";
 import { Failure, type ErrorCode } from "./domain/errors.js";
 import { capabilities, createCore } from "./application/core.js";
-import { memoryDeps, taskRecord } from "./testing/memory.js";
+import { MemoryDefinitions, memoryDeps, taskRecord } from "./testing/memory.js";
 
 const key: Actor = { principal: { kind: "apiKey", keyId: "factory-api" }, via: null, agent: null, requestId: "req_1" };
 const user = (login: string, agent = false): Actor => ({ principal: { kind: "user", login }, via: { kind: "apiKey", keyId: "factory-api" }, agent: agent ? { client: "claude-code" } : null, requestId: "req_2" });
@@ -127,6 +127,23 @@ describe("task rules", () => {
     expect(await code(core.execute("setRollout", key, { factory: "nope", live: null, candidate: null, share: 0, note: null }))).toBe("FACTORY_NOT_FOUND");
     const r = await core.execute("setRollout", key, { factory: "default", live: "fv_1", candidate: "fv_2", share: 0.1, note: null });
     expect(r.rollout).toMatchObject({ live: "fv_1", candidate: "fv_2", share: 0.1, updatedBy: "api" });
+  });
+
+  it("factories as code: with a definitions repo, saving a factory proposes a PR and changes nothing yet", async () => {
+    const definitions = new MemoryDefinitions();
+    const m = memoryDeps({ definitions });
+    const core = createCore(m.deps);
+    const input = { slug: "payments", extends: "default", description: "Money rules", scorers: ["ledger-balances"], benchmarks: [], world: null, mergeRisk: null };
+    const r = await core.execute("saveFactory", user("ada"), input);
+    expect(r.proposal).toEqual({ number: 1, url: "https://github.com/acme/factory/pull/1" });
+    expect(definitions.proposed[0]).toMatchObject({ by: "ada", def: { slug: "payments", scorers: ["ledger-balances"] } });
+    expect(await m.org.factories()).toEqual([]);
+    definitions.down = true;
+    const failed = await core.execute("saveFactory", user("ada"), input).catch((e: unknown) => e);
+    expect(failed instanceof Failure && failed.error).toMatchObject({ code: "CODE_HOST_UNAVAILABLE", repo: "acme/factory" });
+    // Without a definitions repo it's saved straight away.
+    const direct = createCore(memoryDeps().deps);
+    expect((await direct.execute("saveFactory", user("ada"), input)).proposal).toBeNull();
   });
 
   it("egress: unknown tasks are skipped and a repeated window counts once", async () => {

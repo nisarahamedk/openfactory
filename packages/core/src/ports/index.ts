@@ -120,6 +120,21 @@ export interface FactoryCatalog {
   factories(): Promise<FactoryView[]>;
 }
 
+/** A proposed change to the definitions repo: the pull request, or why the code host refused. */
+export type Proposed = { ok: true; number: number; url: string } | { ok: false; reason: string };
+
+/**
+ * Factory definitions as code: a git repo that holds each team factory as a file. The app proposes changes as
+ * pull requests; a definition takes effect when the PR merges and the server syncs it into OrgStore.
+ * Rollout state (live, candidate, share) is not here: it stays a database record, like a deploy.
+ */
+export interface DefinitionRepo {
+  /** Where definitions live, as owner/name, for messages. */
+  where(): string;
+  /** Open a pull request that writes this factory's definition. */
+  proposeFactory(def: OrgFactory, by: string): Promise<Proposed>;
+}
+
 /** The latest start-up checks. */
 export interface HealthCheck {
   report(): Promise<HealthReport>;
@@ -156,6 +171,8 @@ export interface CoreDeps {
   org: OrgStore;
   directory: Directory;
   catalog: FactoryCatalog;
+  /** Null when definitions are saved directly to OrgStore (no definitions repo configured). */
+  definitions: DefinitionRepo | null;
   health: HealthCheck;
   /** Null when benchmarks aren't set up (no BENCH_DIR). */
   bench: Bench | null;

@@ -27,7 +27,7 @@ import type {
   Team,
 } from "@openfactory/contracts";
 import type { AuditEntry, FactoryInfo, FactoryView } from "@openfactory/contract";
-import type { AuditLog, Bench, BenchRunRecord, CodeHost, CoreDeps, EventTranslator, OrgStore, RolloutStore, TaskRunner, TaskStore, ViewStore } from "../ports/index.js";
+import type { AuditLog, Bench, BenchRunRecord, CodeHost, CoreDeps, DefinitionRepo, EventTranslator, Proposed, OrgStore, RolloutStore, TaskRunner, TaskStore, ViewStore } from "../ports/index.js";
 
 const same = (a: RepoRef, b: RepoRef) => a.owner === b.owner && a.name === b.name;
 
@@ -219,7 +219,22 @@ export const testFactoryInfo: FactoryInfo = {
 };
 
 /** Core deps backed by memory, with every store exposed for assertions. */
-export function memoryDeps(over: { repos?: string[]; teams?: Team[]; factories?: FactoryView[]; outcomes?: (taskId: TaskId, o: Outcome, key: string) => Promise<boolean> } = {}) {
+/** A definitions repo that keeps proposed pull requests in memory; `down` makes the code host refuse. */
+export class MemoryDefinitions implements DefinitionRepo {
+  readonly proposed: { def: OrgFactory; by: string; number: number }[] = [];
+  down = false;
+  where(): string {
+    return "acme/factory";
+  }
+  async proposeFactory(def: OrgFactory, by: string): Promise<Proposed> {
+    if (this.down) return { ok: false, reason: "GitHub answered 503" };
+    const number = this.proposed.length + 1;
+    this.proposed.push({ def, by, number });
+    return { ok: true, number, url: `https://github.com/acme/factory/pull/${number}` };
+  }
+}
+
+export function memoryDeps(over: { definitions?: DefinitionRepo; repos?: string[]; teams?: Team[]; factories?: FactoryView[]; outcomes?: (taskId: TaskId, o: Outcome, key: string) => Promise<boolean> } = {}) {
   const tasks = new MemoryTasks();
   const runner = new MemoryRunner(tasks);
   const codeHost = new MemoryCodeHost();
@@ -253,6 +268,7 @@ export function memoryDeps(over: { repos?: string[]; teams?: Team[]; factories?:
     org,
     directory: { teams: async () => over.teams ?? [] },
     catalog: { info: async () => testFactoryInfo, factories: async () => over.factories ?? [{ slug: "default", extends: null, description: null, scorers: [], benchmarks: [], world: null, mergeRisk: null, teams: [] }] },
+    definitions: over.definitions ?? null,
     health: { report: async () => ({ at: "2026-11-14T00:00:00.000Z", ok: true, checks: [] }) },
     bench,
     translator: ignoreAll,

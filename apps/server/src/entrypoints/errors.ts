@@ -5,7 +5,7 @@
 import { details, retryable, type ErrorCode, type FactoryError } from "@openfactory/core";
 
 /** HTTP status by what the caller can do about it. */
-export function statusOf(code: ErrorCode): 400 | 403 | 404 | 409 | 422 {
+export function statusOf(code: ErrorCode): 400 | 403 | 404 | 409 | 422 | 502 {
   switch (code) {
     case "INVALID_REQUEST":
       return 400;
@@ -25,6 +25,9 @@ export function statusOf(code: ErrorCode): 400 | 403 | 404 | 409 | 422 {
       return 409;
     case "NO_HIDDEN_CHECK":
       return 422;
+    // The factory's own dependency failed; the same call may work in a moment.
+    case "CODE_HOST_UNAVAILABLE":
+      return 502;
     // The repo isn't one the factory works in: the caller names another, or an admin connects it.
     case "REPO_NOT_CONNECTED":
       return 400;

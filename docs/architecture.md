@@ -68,13 +68,22 @@ Ports (`packages/core/src/ports`) are the core's own small interfaces, shaped by
 
 Signal plumbing doesn't count as an action, so it skips the registry. The GitHub webhook, the poller and the job queue feed the task runner directly. Through the API, signals and egress reports are actions (`postSignal`, `postEgress`) and are audited.
 
-## Factories as code (proposed)
+## Factories as code
 
-Factory definitions should live in git, so each change is reviewed, diffable and revertible like code. That covers versions, team factories, scorers and benchmarks. Saving one in the app would open a PR to the org's factory repo.
+Decided by Nisar on 2026-11-14.
 
-Rollout state should stay a database record, like a deploy. That covers which version is live, the candidate and its share. It changes often, it needs to apply instantly, and the audit log already records who changed it.
+Team factory definitions live in git, so every change is reviewed, diffable and revertible like code. Each definition is `factories/<slug>.yaml` in the definitions repo, in the same shape as a `factories:` entry in factory.yaml.
 
-Today definitions are saved to Postgres through `saveFactory`. The registry entry stays the same when this moves to git; only the adapter behind it changes.
+- **Saving**: when `FACTORY_DEFINITIONS_REPO=owner/name` is set, `saveFactory` (in the app, REST or MCP) opens a pull request there and returns it as `proposal`. Nothing changes until the PR is merged. If the code host fails, the call returns `CODE_HOST_UNAVAILABLE` (502, retryable).
+- **Syncing**: the server copies the default branch's definitions into the database at start-up and every minute. New tasks pick them up from there.
+- **Without a definitions repo**, definitions are saved straight to the database. Local dev and simulated orgs work this way.
+- **Rollout state** stays a database record, like a deploy: which version is live, the candidate and its share. It must apply instantly, and the audit log records who changed it.
+
+The core sees a `DefinitionRepo` port. The GitHub adapter is `apps/server/src/adapters/definitions.ts`.
+
+Not yet covered:
+- Deleting a definition file doesn't remove the factory.
+- Factory versions (prompts, skills, routing) are still built from factory.yaml.
 
 ## Deviations and follow-ups
 

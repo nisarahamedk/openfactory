@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { BenchmarkTask, ConnectedSource, InboundEvent, OrgFactory, OrgState, OrgTeam, Person, LedgerEvent, RolloutState, SavedView, TaskRecord, Team, type LedgerReader, type TaskId, type TaskStatus, type ViewShare } from "@openfactory/contracts";
 import { BenchRun } from "@openfactory/bench";
-import { FactoryInfo, FactoryView, HealthReport } from "@openfactory/contract";
+import { FactoryInfo, FactoryView, HealthReport, Proposal } from "@openfactory/contract";
 
 export interface FactoryApiConfig {
   baseUrl: string;
@@ -26,6 +26,9 @@ export class FactoryApiError extends Error {
 function listOf<T extends z.ZodType>(item: T, key: string) {
   return z.union([z.array(item), z.object({ [key]: z.array(item) }).transform((o) => o[key] as z.infer<T>[])]);
 }
+/** saveFactory's answer: the factory, and the pull request when definitions live in git. */
+const SavedFactory = z.object({ factory: OrgFactory, proposal: Proposal.nullable().default(null) });
+
 function oneOf<T extends z.ZodType>(item: T, key: string) {
   return z.union([z.object({ [key]: item }).transform((o) => o[key] as z.infer<T>), item]);
 }
@@ -208,8 +211,9 @@ export class FactoryApi implements LedgerReader {
     return this.call("POST", "/v1/org/teams", oneOf(OrgTeam, "team"), input);
   }
 
-  saveFactory(input: Partial<Omit<OrgFactory, "createdBy" | "createdAt">> & { slug: string; by: string }): Promise<OrgFactory> {
-    return this.call("POST", "/v1/org/factories", oneOf(OrgFactory, "factory"), input);
+  /** With a definitions repo, `proposal` is the pull request that makes the change (it applies once merged). */
+  saveFactory(input: Partial<Omit<OrgFactory, "createdBy" | "createdAt">> & { slug: string; by: string }): Promise<{ factory: OrgFactory; proposal: Proposal | null }> {
+    return this.call("POST", "/v1/org/factories", SavedFactory, input);
   }
 
   connectSource(input: Omit<ConnectedSource, "connectedBy" | "connectedAt" | "routes" | "reply"> & { routes?: Record<string, string>; reply?: Partial<ConnectedSource["reply"]> & { mode: ConnectedSource["reply"]["mode"] }; by: string }): Promise<ConnectedSource> {

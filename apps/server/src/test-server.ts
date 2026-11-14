@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { kindOf, translate } from "@openfactory/cloudevents";
 import type { Outcome, TaskId, Team } from "@openfactory/contracts";
-import { createCore, mergeTeams } from "@openfactory/core";
+import { createCore, mergeTeams, type DefinitionRepo } from "@openfactory/core";
 import { MemoryBench, MemoryCodeHost, MemoryRunner, MemoryTasks, testFactoryInfo } from "@openfactory/core/testing";
 import { AppStore, AuditStore, Ledger, OrgStore } from "@openfactory/ledger";
 import { drizzle } from "drizzle-orm/pglite";
@@ -22,7 +22,7 @@ export const TEAMS: Team[] = [
   { slug: "payments", name: "Payments", source: "config", members: [{ login: "omar", name: null, role: "member" }], repos: ["o/pay"], factory: "payments" },
 ];
 
-export async function testServer(opts: { apiToken?: string; teams?: Team[]; repos?: string[] } = {}) {
+export async function testServer(opts: { apiToken?: string; teams?: Team[]; repos?: string[]; definitions?: DefinitionRepo } = {}) {
   const db = drizzle(new PGlite());
   const ledger = new Ledger(db);
   await ledger.migrate();
@@ -59,6 +59,7 @@ export async function testServer(opts: { apiToken?: string; teams?: Team[]; repo
     rollouts: store,
     org,
     directory: { teams: async () => teams },
+    definitions: opts.definitions ?? null,
     catalog: { info: async () => testFactoryInfo, factories: async () => factoryViews({ payments: { extends: "default", scorers: ["ledger-balances"], benchmarks: [], world: "payments-30d" } }, await allTeams()) },
     health: { report: async () => ({ at: "t", ok: true, checks: [] }) },
     bench,

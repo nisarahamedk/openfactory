@@ -151,6 +151,10 @@ export const InvitePerson = z
 /** Body of POST /v1/org/teams. */
 export const SaveOrgTeam = OrgTeam.omit({ createdBy: true, createdAt: true }).extend({ by }).meta({ id: "SaveOrgTeam" });
 /** Body of POST /v1/org/factories. */
+/** A change proposed as a pull request to the factory definitions repo; it takes effect when merged. */
+export const Proposal = z.object({ number: z.number().int(), url: z.string() }).meta({ id: "Proposal" });
+export type Proposal = z.infer<typeof Proposal>;
+
 export const SaveOrgFactory = OrgFactory.omit({ createdBy: true, createdAt: true }).extend({ by }).meta({ id: "SaveOrgFactory" });
 /** Body of POST /v1/org/sources. */
 export const ConnectOrgSource = ConnectedSource.omit({ connectedBy: true, connectedAt: true }).extend({ by }).meta({ id: "ConnectOrgSource" });

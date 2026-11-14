@@ -105,14 +105,21 @@ export const orgCapabilities: Pick<Registry, "getOrg" | "setOrg" | "connectRepo"
   },
   saveFactory: {
     audience: "admin",
-    risk: "reversible",
+    // With a definitions repo this opens a pull request on the code host; either way it can be undone.
+    risk: "external",
     mcp: true,
     target: (i) => `factory:${i.slug}`,
     run: async ({ deps, actor }, i) => {
       if (i.slug === "default") fail(errors.invalid("The org default factory is defined by factory.yaml; change it there.", [{ path: "slug", message: "reserved" }]));
       const { by, ...f } = i;
       const prev = (await deps.org.factories()).find((x) => x.slug === f.slug);
-      return { factory: await deps.org.putFactory(OrgFactory.parse({ ...f, createdBy: prev?.createdBy ?? personFor(actor, by), createdAt: prev?.createdAt ?? deps.now() })) };
+      const who = personFor(actor, by);
+      const factory = OrgFactory.parse({ ...f, createdBy: prev?.createdBy ?? who, createdAt: prev?.createdAt ?? deps.now() });
+      if (deps.definitions === null) return { factory: await deps.org.putFactory(factory), proposal: null };
+      // Factories as code: the change is a pull request; it takes effect when merged and synced.
+      const r = await deps.definitions.proposeFactory(factory, who);
+      if (!r.ok) fail({ code: "CODE_HOST_UNAVAILABLE", repo: deps.definitions.where(), message: `Couldn't open a pull request in ${deps.definitions.where()}: ${r.reason}. Try again in a moment.` });
+      return { factory, proposal: { number: r.number, url: r.url } };
     },
   },
   connectSource: {

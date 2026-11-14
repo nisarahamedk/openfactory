@@ -502,9 +502,9 @@ export function createDashboard(
   setupPost("/setup/factory", "factories", async (f, by, api) => {
     const high = list(f.high);
     const low = list(f.low);
-    await api.saveFactory({ slug: text(f.slug) ?? "", description: text(f.description), scorers: list(f.scorers), benchmarks: list(f.benchmarks), world: text(f.world), mergeRisk: high.length || low.length ? { high, low } : null, by });
+    const saved = await api.saveFactory({ slug: text(f.slug) ?? "", description: text(f.description), scorers: list(f.scorers), benchmarks: list(f.benchmarks), world: text(f.world), mergeRisk: high.length || low.length ? { high, low } : null, by });
     factoriesCacheBust();
-    return `Saved the ${text(f.slug)} factory.`;
+    return saved.proposal ? `Opened PR #${saved.proposal.number} for the ${text(f.slug)} factory (${saved.proposal.url}). It applies to new tasks once merged.` : `Saved the ${text(f.slug)} factory.`;
   });
   setupPost("/setup/team", "teams", async (f, by, api) => {
     const members = list(f.members).map((login, i) => ({ login, role: i === 0 ? ("maintainer" as const) : ("member" as const) }));
