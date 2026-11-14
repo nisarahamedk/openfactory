@@ -8,6 +8,7 @@ import { mergeScores, runScorers } from "@openfactory/scoring";
 import { z } from "zod";
 import { branchFor, issueTarget, type JobDeps } from "./deps.js";
 import { systemPrompt } from "./prompts.js";
+import { applyBundle, bundleMcp } from "./bundle.js";
 import { TranscriptRecorder } from "./transcript.js";
 import type { ErrorKind } from "./errors.js";
 
@@ -216,15 +217,21 @@ export async function runTurn(
   const record = await mustTask(deps, taskId);
   const { ws, env } = await attach(deps, record);
   const skill = await env.skill();
+  const bundle = deps.config.versionBundles?.[record.factoryVersion] ?? null;
+  if (bundle) {
+    const applied = await applyBundle(ws, ws.repoPath, bundle).catch((e) => ({ ok: false, stderr: describeError(e) }));
+    if (!applied.ok) deps.log("version bundle not fully applied", { taskId, version: record.factoryVersion, stderr: applied.stderr.slice(0, 500) });
+  }
   const session = await deps.agent.openSession({
     workspace: ws,
     cwd: ws.repoPath,
     systemPrompt: systemPrompt(record, branchFor(deps, record), skill, deps.config.baseBranch, {
       otherRepos: scopeRepos(record).slice(1).map((r) => ({ name: `${r.owner}/${r.name}`, path: repoPath("$HOME", r) })),
-      versionNote: deps.config.versionPrompts?.[record.factoryVersion] ?? "",
+      versionNote: [deps.config.versionPrompts?.[record.factoryVersion], bundle?.prompt].filter(Boolean).join("\n\n"),
     }),
     resumeSessionId: record.harnessSessionId,
     model: record.harness.model,
+    ...(bundle ? { mcpServers: bundleMcp(bundle), ...(bundle.effort ? { effort: bundle.effort } : {}) } : {}),
     env: {
       ...(await env.envVars()),
       ...deps.config.agentEnv,

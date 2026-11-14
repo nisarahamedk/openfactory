@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BenchmarkTask, LedgerEvent, RolloutState, SavedView, Signal, TaskRecord, TaskStatus, Team, ViewShare } from "@openfactory/contracts";
+import { BenchmarkTask, ConnectedSource, Identities, InboundEvent, IntakeResult, LedgerEvent, OrgFactory, OrgRole, OrgState, OrgTeam, Persona, Person, RolloutState, SavedView, Signal, TaskRecord, TaskStatus, Team, ViewShare } from "@openfactory/contracts";
 import { ArmSpec, BenchRun } from "@openfactory/bench";
 
 /** Error body every /v1 route returns on failure. */
@@ -23,6 +23,22 @@ export const FactoryInfo = z
       .nullable()
       .optional()
       .meta({ description: "A candidate factory version served to a share of new tasks" }),
+    versions: z
+      .record(
+        z.string(),
+        z.object({
+          label: z.string().nullable(),
+          prompt: z.string().nullable(),
+          models: z.object({ default: z.string(), routes: z.array(z.object({ model: z.string(), labels: z.array(z.string()).optional(), keywords: z.array(z.string()).optional() })) }).nullable(),
+          effort: z.string().nullable(),
+          agentsMd: z.string().nullable(),
+          skills: z.array(z.string()),
+          mcp: z.array(z.string()),
+          codegraph: z.boolean(),
+        }),
+      )
+      .optional()
+      .meta({ description: "What each factory version changes: prompt, routing policy, effort, AGENTS.md guidance, skills, MCP tools, CodeGraph" }),
     rules: z.object({ label: z.string(), maxTaskUsd: z.number(), maxReviewRounds: z.number(), maxNudges: z.number() }),
     prompts: z.object({ system: z.string(), intake: z.string(), review: z.string(), foreman: z.string() }),
   })
@@ -34,6 +50,8 @@ export const CancelTask = z.object({ by: z.string().max(100).optional(), reason:
 
 /** Body of POST /v1/tasks/{id}/retry. */
 export const RetryTask = z.object({ by: z.string().max(100).optional() }).meta({ id: "RetryTask" });
+/** Body of POST /v1/tasks/{id}/approve. */
+export const ApproveTask = z.object({ by: z.string().min(1).max(100), note: z.string().max(2000).optional() }).meta({ id: "ApproveTask" });
 
 /** GET /v1/health: whether the factory is set up so a task can succeed. */
 export const HealthReport = z
@@ -108,8 +126,26 @@ export const NewTaskRequest = z
     ask: z.string().min(3).max(20_000).meta({ description: "What the person wants, in their words. The first line becomes the title." }),
     repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).nullable().default(null).meta({ description: "owner/name; omit to let the factory pick from the person's team" }),
     requestedBy: z.string().min(1).max(100),
+    origin: z.object({ label: z.string().max(200), url: z.string().max(2000).nullable() }).nullable().optional().meta({ description: "Where the ask came from (a Slack thread, a Jira issue), shown on the task" }),
+    labels: z.array(z.string().max(50)).max(20).optional().meta({ description: "Extra issue labels (they steer model routing, e.g. ui, small)" }),
   })
   .meta({ id: "NewTaskRequest" });
+
+const by = z.string().min(1).max(100).meta({ description: "Login of the person making the change" });
+/** Body of POST /v1/org. */
+export const SetOrg = z.object({ name: z.string().min(1).max(80), by, simulated: z.boolean().optional() }).meta({ id: "SetOrg" });
+/** Body of POST /v1/org/repos. */
+export const ConnectOrgRepo = z.object({ repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/), by }).meta({ id: "ConnectOrgRepo" });
+/** Body of POST /v1/org/people. */
+export const InvitePerson = z
+  .object({ login: Person.shape.login, name: z.string().max(120).nullable().optional(), email: z.string().email().nullable().optional(), persona: Persona, role: OrgRole.optional(), identities: Identities.optional(), by })
+  .meta({ id: "InvitePerson" });
+/** Body of POST /v1/org/teams. */
+export const SaveOrgTeam = OrgTeam.omit({ createdBy: true, createdAt: true }).extend({ by }).meta({ id: "SaveOrgTeam" });
+/** Body of POST /v1/org/factories. */
+export const SaveOrgFactory = OrgFactory.omit({ createdBy: true, createdAt: true }).extend({ by }).meta({ id: "SaveOrgFactory" });
+/** Body of POST /v1/org/sources. */
+export const ConnectOrgSource = ConnectedSource.omit({ connectedBy: true, connectedAt: true }).extend({ by }).meta({ id: "ConnectOrgSource" });
 
 /** Body of POST /v1/tasks/{id}/messages. */
 export const PostMessage = z.object({ author: z.string().min(1).max(100), text: z.string().min(1).max(10_000) }).meta({ id: "PostMessage" });
@@ -171,6 +207,14 @@ export const V1_ROUTES: RouteSpec[] = [
     summary: "Try a failed or stopped task again: from intake when it has no PR, else as a review round that carries on",
     body: RetryTask,
     responses: { 200: { description: "The task after the retry was scheduled", schema: z.object({ task: TaskRecord }) }, ...bad, ...notFound },
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/approve",
+    operationId: "approveTask",
+    summary: "Approve the task's PR as a person. Recorded on the task and posted on the PR; it never starts a review round, and merging stays a person's call",
+    body: ApproveTask,
+    responses: { 200: { description: "The task with the approval recorded", schema: z.object({ task: TaskRecord }) }, ...bad, ...notFound },
   },
   {
     method: "get",
@@ -318,6 +362,36 @@ export const V1_ROUTES: RouteSpec[] = [
     summary: "Delete a saved view (its owner only)",
     body: z.object({ by: z.string() }),
     responses: { 200: { description: "Deleted", schema: z.object({ deleted: z.boolean() }) }, ...bad },
+  },
+  {
+    method: "get",
+    path: "/org",
+    operationId: "getOrg",
+    summary: "The org as set up in the app: name, repos, people with personas, teams, team factories, connected tools and setup progress",
+    responses: { 200: { description: "Org", schema: z.object({ org: OrgState }) } },
+  },
+  { method: "post", path: "/org", operationId: "setOrg", summary: "Name the org (the first setup step); the person becomes its first admin", body: SetOrg, responses: { 200: { description: "Org", schema: z.object({ org: OrgState }) }, ...bad } },
+  { method: "post", path: "/org/repos", operationId: "connectRepo", summary: "Connect a repo the factory may open PRs in", body: ConnectOrgRepo, responses: { 200: { description: "Org", schema: z.object({ org: OrgState }) }, ...bad } },
+  { method: "post", path: "/org/people", operationId: "invitePerson", summary: "Invite a person (or change one) with a persona, role and their ids in Slack, Teams and Jira", body: InvitePerson, responses: { 200: { description: "Person", schema: z.object({ person: Person }) }, ...bad } },
+  { method: "post", path: "/org/people/:login/join", operationId: "joinOrg", summary: "Mark an invited person as joined (they signed in)", responses: { 200: { description: "Person", schema: z.object({ person: Person }) }, ...notFound } },
+  { method: "post", path: "/org/teams", operationId: "saveTeam", summary: "Create or change a team: members, repos, the part of a shared repo it owns, and its factory", body: SaveOrgTeam, responses: { 200: { description: "Team", schema: z.object({ team: OrgTeam }) }, ...bad } },
+  { method: "post", path: "/org/factories", operationId: "saveFactory", summary: "Create or change a team factory on top of the org default", body: SaveOrgFactory, responses: { 200: { description: "Factory", schema: z.object({ factory: OrgFactory }) }, ...bad } },
+  { method: "post", path: "/org/sources", operationId: "connectSource", summary: "Connect a tool whose CloudEvents start work or report outcomes (Slack, Microsoft Teams, Jira, Datadog, Rootly, PagerDuty, any CDEvents producer)", body: ConnectOrgSource, responses: { 200: { description: "Source", schema: z.object({ source: ConnectedSource }) }, ...bad } },
+  {
+    method: "post",
+    path: "/events",
+    operationId: "postEvents",
+    summary: "CloudEvents 1.0 (structured, batch or binary mode) from connected tools: asks start tasks, merges and closes move PRs, deploys and incidents become outcomes",
+    body: z.unknown(),
+    responses: { 202: { description: "What each event did", schema: z.object({ results: z.array(z.object({ id: z.string(), source: z.string(), result: IntakeResult, duplicate: z.boolean() })) }) }, ...bad },
+  },
+  {
+    method: "get",
+    path: "/events",
+    operationId: "listEvents",
+    summary: "Inbound events, newest first, each with what the factory did with it",
+    query: z.object({ source: z.string().optional(), limit: z.coerce.number().int().min(1).max(1000).optional() }),
+    responses: { 200: { description: "Events", schema: z.object({ events: z.array(InboundEvent) }) } },
   },
   {
     method: "get",

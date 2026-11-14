@@ -92,3 +92,13 @@ describe("GitHubPollingSource", () => {
     expect(store.get("github-poll:acme/app")! > "2026-11-13T00:30:00Z").toBe(true);
   });
 });
+
+describe("quietMentions", () => {
+  it("turns @-mentions into inline code and leaves emails, scopes and code alone", async () => {
+    const { quietMentions } = await import("./index.js");
+    expect(quietMentions("Hi @acme-priya, thanks @acme-omar.")).toBe("Hi `acme-priya`, thanks `acme-omar`.");
+    expect(quietMentions("@maya see this")).toBe("`maya` see this");
+    expect(quietMentions("mail maya@acme-sim.example")).toBe("mail maya@acme-sim.example");
+    expect(quietMentions("install @types/node and `@acme-x`")).toBe("install @types/node and `@acme-x`");
+  });
+});

@@ -10,6 +10,7 @@
  *   /v1/...                          benchmark routes (packages/bench)
  *   POST /webhooks/github            GitHub webhooks (optional; polling is the default)
  *   GET  /evidence/:taskId/:file     evidence copied out of sandboxes, linked from PRs
+ *   /v1/org..., /v1/events            org setup and inbound CloudEvents (org-api.ts)
  *   GET  /v1/openapi.json            OpenAPI 3.1 for /v1 (generated from the Zod contracts)
  *   POST /mcp                        the factory's MCP server (Streamable HTTP), same bearer token as /v1
  */
@@ -20,7 +21,7 @@ import type { AppStore, Ledger } from "@openfactory/ledger";
 import type { EvidenceStore } from "@openfactory/task-job";
 import { Hono } from "hono";
 import type { z } from "zod";
-import { buildOpenApi, CancelTask, RetryTask, type HealthReport, EgressReport, FactoryApi, NewTaskRequest, PostMessage, SaveView, SetRollout, type FactoryInfo, type FactoryView } from "@openfactory/client";
+import { ApproveTask, buildOpenApi, CancelTask, RetryTask, type HealthReport, EgressReport, FactoryApi, NewTaskRequest, PostMessage, SaveView, SetRollout, type FactoryInfo, type FactoryView } from "@openfactory/client";
 import { createMcpHttpHandler } from "@openfactory/mcp";
 
 const SAFE = /^[A-Za-z0-9._-]{1,200}$/;
@@ -58,6 +59,8 @@ export type AppDeps = {
   factory: () => Promise<z.infer<typeof FactoryInfo>>;
   /** POST /v1/tasks/:id/cancel; null when the task is unknown. */
   cancel: (taskId: TaskId, by: string, reason?: string) => Promise<TaskRecord | null>;
+  /** POST /v1/tasks/:id/approve; null when the task is unknown, an Error when it has no open PR. */
+  approve: (taskId: TaskId, by: string, note?: string) => Promise<TaskRecord | null>;
   /** POST /v1/tasks/:id/retry; null when the task is unknown. */
   retry: (taskId: TaskId, by: string) => Promise<TaskRecord | null>;
   /** GET /v1/health: the latest start-up checks. */
@@ -74,7 +77,9 @@ export type AppDeps = {
   /** Write to a task as a person; null when the task is unknown. */
   message: (taskId: TaskId, author: string, text: string) => Promise<{ task: TaskRecord; url: string | null } | null>;
   /** Ask for a new task from the app; throws a message for the person when it can't. */
-  ask: (input: { ask: string; repo: string | null; requestedBy: string }) => Promise<{ issueUrl: string; repo: string; issueNumber: number }>;
+  ask: (input: { ask: string; repo: string | null; requestedBy: string; origin?: { label: string; url: string | null } | null; labels?: string[] }) => Promise<{ issueUrl: string; repo: string; issueNumber: number }>;
+  /** Org setup and inbound CloudEvents (org-api.ts), mounted under /v1. */
+  org?: Hono | null;
 };
 
 export function createApp(d: AppDeps): Hono {
@@ -128,6 +133,18 @@ export function createApp(d: AppDeps): Hono {
     if (!body.success) return c.json({ code: "INVALID_REQUEST", message: "bad retry request", issues: body.error.issues }, 400);
     const task = await d.retry(id.data, body.data.by ?? "api");
     return task ? c.json({ task }) : c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
+  });
+  v1.post("/tasks/:id/approve", async (c) => {
+    const id = TaskId.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
+    const body = ApproveTask.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return c.json({ code: "INVALID_REQUEST", message: "bad approval", issues: body.error.issues }, 400);
+    try {
+      const task = await d.approve(id.data, body.data.by, body.data.note);
+      return task ? c.json({ task }) : c.json({ code: "TASK_NOT_FOUND", message: "no such task" }, 404);
+    } catch (e) {
+      return c.json({ code: "NOT_REVIEWABLE", message: e instanceof Error ? e.message : String(e) }, 409);
+    }
   });
   v1.get("/health", async (c) => c.json({ health: await d.health() }));
   v1.post("/signals", async (c) => {
@@ -213,6 +230,7 @@ export function createApp(d: AppDeps): Hono {
     return c.json({ deleted: await d.store.deleteView(c.req.param("id"), by.by) });
   });
   if (d.bench) v1.route("/", d.bench);
+  if (d.org) v1.route("/", d.org);
   app.route("/v1", v1);
 
   // MCP tools call /v1 in-process with the same token, so they can never do more than the API allows.

@@ -243,6 +243,19 @@ main{padding:20px 16px 48px}.g2,.g3,.g4,.grid.detail,.split{grid-template-column
 .row,.rowhead{grid-template-columns:18px minmax(0,1fr) 56px;padding-left:14px;padding-right:14px}.row .pr,.row .cost,.rowhead span:nth-child(3),.rowhead span:nth-child(4){display:none}
 .spec>a,.spec>div{grid-template-columns:1fr;gap:10px}.field,.kv{grid-template-columns:96px minmax(0,1fr)}.msg,.tool{grid-template-columns:56px minmax(0,1fr)}.tool>:nth-child(2),.tool>:nth-child(4){display:none}
 }
+/* org setup */
+.stepn{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12.5px;font-weight:650;border:1px solid var(--rule-2);color:var(--ink-2);flex:none;margin-top:-2px}
+.stepn.done{background:var(--ink);border-color:var(--ink);color:var(--on-ink)}
+.fld{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--ink-2);min-width:0}
+.fld small{font-size:12px}
+.fld input.in,.fld select.in{width:100%}
+.form{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;align-items:end;margin-top:12px}
+.form .wide{grid-column:1/-1}
+.checks{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink-2);height:32px;align-items:center}
+.progress{height:6px;border-radius:3px;background:var(--rule);overflow:hidden;margin-top:12px;max-width:420px}
+.progress>i{display:block;height:100%;background:var(--ink)}
+.simbar{background:var(--hivis);color:var(--on-hivis);font-size:13px;font-weight:550;padding:6px 12px;border-radius:6px;margin-bottom:16px;display:flex;gap:8px;align-items:center}
+.pill{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:11px;background:var(--hover);font-size:12.5px;color:var(--ink-2);margin:0 4px 4px 0}
 `;
 
 /** Crosshair + tooltip for every chart (one tiny script; charts render fine without it). */
@@ -318,7 +331,7 @@ export function Icon({ name, size = 16 }: { name: keyof typeof ICONS | string; s
 
 // ───────────────────────────── shell ─────────────────────────────
 
-export type Nav = "inbox" | "tasks" | "insights" | "bench" | "factories" | "scorers" | "teams" | "none";
+export type Nav = "inbox" | "tasks" | "insights" | "bench" | "factories" | "scorers" | "teams" | "people" | "sources" | "setup" | "none";
 
 export interface ShellProps {
   title: string;
@@ -331,6 +344,9 @@ export interface ShellProps {
   viewer?: string | null;
   /** The scope bar, when the page has one. */
   scope?: Child;
+  /** Org setup steps still to do (shown on the Setup link), and the org's name when it is a simulation. */
+  setupLeft?: number;
+  simulated?: string | null;
   children: Child;
 }
 
@@ -353,6 +369,11 @@ function NavItems({ p }: { p: ShellProps }) {
       <NavLink href="/bench" icon="bench" label="Benchmarks" on={p.nav === "bench"} />
       <NavLink href="/factories" icon="factory" label="Factories" on={p.nav === "factories"} />
       <NavLink href="/scorers" icon="scorer" label="Scorers" on={p.nav === "scorers"} />
+      <div class="sect">Org</div>
+      <NavLink href="/teams" icon="agent" label="Teams" on={p.nav === "teams"} />
+      <NavLink href="/people" icon="eye" label="People" on={p.nav === "people"} />
+      <NavLink href="/sources" icon="activity" label="Sources" on={p.nav === "sources"} />
+      <NavLink href="/setup" icon="check" label="Setup" on={p.nav === "setup"} count={p.setupLeft} />
     </>
   );
 }
@@ -390,6 +411,7 @@ export function Shell(p: ShellProps) {
             </div>
           </aside>
           <main>
+            {p.simulated ? <div class="simbar"><Icon name="flask" size={15} />{p.simulated} is a simulated org: its people, chat, tickets, deploys and incidents are fakes driving the real factory. Nothing merges.</div> : null}
             {p.scope ?? null}
             {p.flash !== null ? <div class="flash"><Icon name="info" />{p.flash}</div> : null}
             {p.children}

@@ -32,6 +32,10 @@ import {
   versionRows,
 } from "./pages.js";
 import { HealthAlert, Shell, type Nav } from "./ui.js";
+import { homeFor, PeoplePage, SetupPage, SourcesPage } from "./org.js";
+import { teamSuites } from "./mix.js";
+import { TeamSuites, VersionDefs } from "./suites.js";
+import type { OrgState, Persona } from "@openfactory/contracts";
 import { AgentPage, AgentsPage, AppsPage, AutomationsPage, BenchPage, DashboardPage, EnvironmentsPage, ErrorPage, parseTranscript, SecretsPage, TaskPage, TranscriptPage } from "./views.js";
 
 /**
@@ -89,10 +93,13 @@ const pathAndQuery = (c: Context) => {
 /** The least role each form post needs. Viewers save views; engineers work tasks; admins change factories and spend. */
 function roleFor(path: string): Role {
   if (path === "/signout" || path === "/views" || /^\/views\/[^/]+\/delete$/.test(path)) return "viewer";
-  if (/^\/factories\/[^/]+\/rollout$/.test(path) || path === "/bench/runs") return "admin";
+  if (/^\/factories\/[^/]+\/rollout$/.test(path) || path === "/bench/runs" || path.startsWith("/setup/")) return "admin";
   return "engineer";
 }
-const msg = (path: string, m: string) => `${path}${path.includes("?") ? "&" : "?"}msg=${encodeURIComponent(m)}`;
+const msg = (path: string, m: string) => {
+  const [base, hash] = path.split("#") as [string, string | undefined];
+  return `${base}${base.includes("?") ? "&" : "?"}msg=${encodeURIComponent(m)}${hash ? `#${hash}` : ""}`;
+};
 /** Only same-app paths are followed after a form post. */
 const safePath = (p: unknown, fallback = "/") => (typeof p === "string" && p.startsWith("/") && !p.startsWith("//") ? p : fallback);
 
@@ -104,7 +111,7 @@ const safePath = (p: unknown, fallback = "/") => (typeof p === "string" && p.sta
  */
 export function createDashboard(
   api: FactoryApi,
-  opts: { password: string | null; models: [string, string]; now?: () => string; factoryName?: string; mcpUrl?: string | null; auth?: Auth | null },
+  opts: { password: string | null; models: [string, string]; now?: () => string; factoryName?: string; mcpUrl?: string | null; auth?: Auth | null; publicApiUrl?: string | null },
 ): Hono {
   const auth = opts.auth ?? null;
   const app = new Hono();
@@ -118,6 +125,9 @@ export function createDashboard(
   const factory = cached<FactoryInfo | null>(() => api.factory(), null);
   const teamsOf = cached<Team[]>(() => api.teams(), [], 30_000);
   const healthOf = cached<HealthReport | null>(() => api.health(), null, 30_000);
+  /** The org as set up in the app; null on a server without org setup. Busted after every setup write. */
+  const loadOrg = () => cached<OrgState | null>(() => api.org(), null, 15_000);
+  let orgOf = loadOrg();
   type Factories = Awaited<ReturnType<FactoryApi["factories"]>>;
   const loadFactories = () => cached<Factories>(() => api.factories(), { factories: [], rollouts: [] }, 10_000);
   let factoriesOf = loadFactories();
@@ -141,9 +151,10 @@ export function createDashboard(
 
   type PageOpts = { title: string; nav: Nav; inboxCount?: number; refreshSec?: number | undefined; flash?: string | null; scope?: Child };
   const page = async (c: Context, p: PageOpts, body: Child) => {
-    const [f, h] = await Promise.all([factory(), healthOf()]);
+    const [f, h, o] = await Promise.all([factory(), healthOf(), orgOf()]);
+    const left = o ? o.setup.filter((x) => !x.done).length : 0;
     return (
-      <Shell title={p.title} nav={p.nav} flash={p.flash === undefined ? (c.req.query("msg") ?? null) : p.flash} inboxCount={p.inboxCount} refreshSec={p.refreshSec} factory={{ name, version: f?.version ?? "" }} viewer={viewerOf(c)} scope={p.scope}>
+      <Shell setupLeft={left || undefined} simulated={o?.org?.simulated ? o.org.name : null} title={p.title} nav={p.nav} flash={p.flash === undefined ? (c.req.query("msg") ?? null) : p.flash} inboxCount={p.inboxCount} refreshSec={p.refreshSec} factory={{ name, version: f?.version ?? "" }} viewer={viewerOf(c)} scope={p.scope}>
         {h && !h.ok ? <HealthAlert health={h} /> : null}
         {body}
       </Shell>
@@ -246,7 +257,12 @@ export function createDashboard(
     const login = typeof form.login === "string" ? form.login.trim() : "";
     if (!LOGIN.test(login)) return c.redirect(msg("/signin", "That doesn't look like a login."), 303);
     setCookie(c, "of_user", login, { path: "/", httpOnly: true, sameSite: "Lax", maxAge: 60 * 60 * 24 * 365 });
-    return c.redirect(safePath(form.back), 303);
+    const back = safePath(form.back);
+    if (back !== "/") return c.redirect(back, 303);
+    // Each persona lands on the page that answers their first question.
+    const [o, teams] = await Promise.all([orgOf(), teamsOf()]);
+    const persona = (o?.people.find((p) => p.login.toLowerCase() === login.toLowerCase())?.persona ?? null) as Persona | null;
+    return c.redirect(homeFor(persona, teams, login), 303);
   });
 
   // ── inbox ──
@@ -335,6 +351,20 @@ export function createDashboard(
     return c.html(await page(c, { title: `Session · ${t.title}`, nav: "tasks", flash: null }, <TranscriptPage t={t} turn={Number.isFinite(turn) ? turn : null} lines={parseTranscript(body)} />));
   });
 
+  app.post("/tasks/:id/approve", async (c) => {
+    const id = TaskId.parse(c.req.param("id"));
+    const by = viewerOf(c);
+    if (!by) return c.redirect(`/signin?back=/tasks/${id}`, 303);
+    try {
+      const t = await api.approve(id, { by });
+      const n = new Set((t.approvals ?? []).map((a) => a.by)).size;
+      return c.redirect(msg(`/tasks/${id}`, `Approved. ${n} approval${n === 1 ? "" : "s"} so far; merging stays on GitHub.`), 303);
+    } catch (err) {
+      if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(`/tasks/${id}`, `Couldn't approve: ${err.message}`), 303);
+      throw err;
+    }
+  });
+
   app.post("/tasks/:id/retry", async (c) => {
     const id = TaskId.parse(c.req.param("id"));
     const back = typeof (await c.req.parseBody()).back === "string" ? "/" : `/tasks/${id}`;
@@ -413,6 +443,75 @@ export function createDashboard(
     return c.redirect(msg("/insights", ok ? "View deleted." : "Only its owner can delete a view."), 303);
   });
 
+  // ── org: setup, people, sources ──
+  const eventsUrl = `${(opts.publicApiUrl ?? "https://<factory>").replace(/\/$/, "")}/v1/events`;
+  const requireOrg = async () => {
+    const o = await api.org();
+    orgOf = loadOrg();
+    return o;
+  };
+  app.get("/setup", async (c) => {
+    const [o, teams] = await Promise.all([requireOrg(), teamsOf()]);
+    return c.html(await page(c, { title: "Setup", nav: "setup" }, <SetupPage s={o} viewer={viewerOf(c)} eventsUrl={eventsUrl} teams={teams} />));
+  });
+  app.get("/people", async (c) => {
+    const [o, teams] = await Promise.all([requireOrg(), teamsOf()]);
+    return c.html(await page(c, { title: "People", nav: "people" }, <PeoplePage s={o} teams={teams} />));
+  });
+  app.get("/sources", async (c) => {
+    const only = c.req.query("source") ?? null;
+    const [o, events] = await Promise.all([requireOrg(), api.inboundEvents({ ...(only ? { source: only } : {}), limit: 200 })]);
+    return c.html(await page(c, { title: "Sources", nav: "sources", refreshSec: 30 }, <SourcesPage s={o} events={events} only={only} eventsUrl={eventsUrl} />));
+  });
+  const list = (v: unknown) => (typeof v === "string" ? v.split(",").map((x) => x.trim()).filter(Boolean) : []);
+  const text = (v: unknown) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
+  const setupPost = (path: string, anchor: string, run: (form: Record<string, string | File | (string | File)[]>, by: string) => Promise<string>) =>
+    app.post(path, async (c) => {
+      const by = viewerOf(c);
+      if (!by) return c.redirect(`/signin?back=/setup`, 303);
+      const form = await c.req.parseBody({ all: true });
+      try {
+        const said = await run(form, by);
+        orgOf = loadOrg();
+        return c.redirect(msg(`/setup#${anchor}`, said), 303);
+      } catch (err) {
+        if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(`/setup#${anchor}`, `Couldn't save: ${err.message}`), 303);
+        throw err;
+      }
+    });
+  setupPost("/setup/org", "org", async (f, by) => {
+    await api.setOrg({ name: text(f.name) ?? "", by });
+    return "Saved the org's name.";
+  });
+  setupPost("/setup/repo", "repo", async (f, by) => {
+    await api.connectRepo({ repo: text(f.repo) ?? "", by });
+    return `Connected ${text(f.repo)}.`;
+  });
+  setupPost("/setup/source", "sources", async (f, by) => {
+    const uses = (Array.isArray(f.uses) ? f.uses : f.uses ? [f.uses] : []).filter((x): x is string => typeof x === "string") as Array<"asks" | "outcomes" | "deploys">;
+    const routes = Object.fromEntries(list(f.routes).map((r) => r.split("=").map((x) => x.trim())).filter((r) => r.length === 2 && r[0] && r[1]));
+    const reply = { mode: (text(f.replyMode) ?? "record") as "record" | "post" | "cloudevents", tokenEnv: text(f.replyTokenEnv), url: text(f.replyUrl), apiBase: null };
+    await api.connectSource({ id: text(f.id) ?? "", kind: (text(f.kind) ?? "cdevents") as never, name: text(f.name) ?? "", ceSource: text(f.ceSource) ?? "", uses, routes, reply, by });
+    return `Connected ${text(f.name)}.`;
+  });
+  setupPost("/setup/factory", "factories", async (f, by) => {
+    const high = list(f.high);
+    const low = list(f.low);
+    await api.saveFactory({ slug: text(f.slug) ?? "", description: text(f.description), scorers: list(f.scorers), benchmarks: list(f.benchmarks), world: text(f.world), mergeRisk: high.length || low.length ? { high, low } : null, by });
+    factoriesCacheBust();
+    return `Saved the ${text(f.slug)} factory.`;
+  });
+  setupPost("/setup/team", "teams", async (f, by) => {
+    const members = list(f.members).map((login, i) => ({ login, role: i === 0 ? ("maintainer" as const) : ("member" as const) }));
+    await api.saveTeam({ slug: text(f.slug) ?? "", name: text(f.name) ?? "", description: text(f.description), repos: list(f.repos), factory: text(f.factory) ?? "default", members, scope: { paths: list(f.paths), labels: list(f.labels) }, by });
+    return `Saved team ${text(f.name)}.`;
+  });
+  setupPost("/setup/person", "people", async (f, by) => {
+    const ids = Object.fromEntries((["slack", "msteams", "jira"] as const).map((k) => [k, text(f[k])]).filter(([, v]) => v)) as Record<string, string>;
+    await api.invite({ login: text(f.login) ?? "", name: text(f.name), email: text(f.email), persona: (text(f.persona) ?? "engineer") as Persona, ...(text(f.role) ? { role: text(f.role) as "viewer" } : {}), identities: ids, by });
+    return `Invited ${text(f.name) ?? text(f.login)}.`;
+  });
+
   // ── teams and people ──
   app.get("/teams", async (c) => {
     const s = await scoped(c, "/teams");
@@ -454,7 +553,7 @@ export function createDashboard(
     if (!fa) return c.html(await page(c, { title: "Not found", nav: "factories", flash: null }, <ErrorPage message="No such factory." />), 404);
     const r = await api.rollout(slug);
     const rows = versionRows(facts.filter((x) => factorySlugOf(x.task, teams) === slug), runs, now());
-    return c.html(await page(c, { title: `${slug} factory`, nav: "factories" }, <FactoryPage fa={fa} info={info} rollout={r.rollout} history={r.history} rows={rows} viewer={viewerOf(c)} runs={runs} tabs={<FactoryTabs slug={slug} on={`/factories/${slug}`} />} />));
+    return c.html(await page(c, { title: `${slug} factory`, nav: "factories" }, <><FactoryPage fa={fa} info={info} rollout={r.rollout} history={r.history} rows={rows} viewer={viewerOf(c)} runs={runs} tabs={<FactoryTabs slug={slug} on={`/factories/${slug}`} />} /><VersionDefs versions={info?.versions} /></>));
   });
   app.post("/factories/:slug/rollout", async (c) => {
     const slug = c.req.param("slug");
@@ -508,9 +607,10 @@ export function createDashboard(
 
   // ── benchmarks ──
   app.get("/bench", async (c) => {
-    const [tasks, runs, all] = await Promise.all([api.benchTasks(), api.benchRuns(), api.listTasks({ limit: 500 })]);
+    const [tasks, runs, all, teams, fs] = await Promise.all([api.benchTasks(), api.benchRuns(), api.listTasks({ limit: 500 }), teamsOf(), factoriesOf()]);
     const versions = [...new Set(all.map((t) => t.factoryVersion))];
-    return c.html(await page(c, { title: "Benchmarks", nav: "bench" }, <BenchPage tasks={tasks} runs={runs} versions={versions} models={opts.models} />));
+    const suites = teamSuites({ teams, factories: fs.factories, bench: tasks, tasks: all, runs, now: now() });
+    return c.html(await page(c, { title: "Benchmarks", nav: "bench" }, <><BenchPage tasks={tasks} runs={runs} versions={versions} models={opts.models} /><TeamSuites suites={suites} days={30} /></>));
   });
   app.get("/bench/runs/:id", (c) => c.redirect(`/bench#${encodeURIComponent(c.req.param("id"))}`, 302));
 

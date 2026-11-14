@@ -85,6 +85,10 @@ export const EventData = {
   world_check: WorldCheckResult,
   /** A person wrote to the task from the factory app (also posted where the task lives). */
   message_received: z.object({ author: z.string(), text: z.string(), url: z.string().nullable() }),
+  /** The task waited for a workspace slot (admission control); `position` is its place in line. */
+  queued: z.object({ position: z.number().int().positive(), slots: z.number().int().positive() }),
+  /** A person approved the PR (GitHub review or the app). */
+  review_approved: z.object({ by: z.string(), headSha: z.string().nullable(), via: z.enum(["github", "app"]) }),
 } as const;
 export type EventType = keyof typeof EventData;
 export type EventDataOf<T extends EventType> = z.infer<(typeof EventData)[T]>;
@@ -219,6 +223,10 @@ export function apply(record: TaskRecord, event: LedgerEvent): TaskRecord {
       return (d as EventDataOf<"comment_received">).isBot
         ? r
         : { ...r, people: { ...r.people, comments: r.people.comments + 1 } };
+    case "review_approved": {
+      const e = d as EventDataOf<"review_approved">;
+      return { ...r, approvals: [...(r.approvals ?? []), { by: e.by, at: event.at, headSha: e.headSha, via: e.via }] };
+    }
     case "review_round_started":
       return { ...r, people: { ...r.people, reviewRounds: r.people.reviewRounds + 1 } };
     case "score_added": {

@@ -63,12 +63,24 @@ export class GitHubClient {
 
 const r = (repo: RepoRef) => `/repos/${repo.owner}/${repo.name}`;
 
+/**
+ * Turn every GitHub @-mention into inline code, so nobody is notified. Simulated orgs use made-up logins
+ * that a real person may own; the agent and foreman write mentions themselves, so this runs on the way out.
+ */
+export function quietMentions(markdown: string): string {
+  return markdown.replace(/(^|[^\w`@/.-])@([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})(?![\w@/-]|\.\w)/g, "$1`$2`");
+}
+
 export class GitHubChat implements Chat {
   readonly name = "github";
-  constructor(private readonly gh: GitHubClient) {}
+  constructor(
+    private readonly gh: GitHubClient,
+    private readonly opts: { mentions?: boolean } = {},
+  ) {}
   async post(target: { repo: RepoRef; issueOrPr: number }, markdown: string): Promise<{ url: string }> {
+    const text = this.opts.mentions === false ? quietMentions(markdown) : markdown;
     const c = await this.gh.request<{ html_url: string }>("POST", `${r(target.repo)}/issues/${target.issueOrPr}/comments`, {
-      body: `${markdown}\n\n${FACTORY_MARKER}`,
+      body: `${text}\n\n${FACTORY_MARKER}`,
     });
     return { url: c.html_url };
   }
@@ -251,13 +263,20 @@ export class GitHubPollingSource implements SignalSource {
     const pulls = await this.gh.request<Array<Pull & { updated_at: string }>>("GET", `${r(repo)}/pulls?state=open&sort=updated&direction=desc&per_page=20`);
     const out: Signal[] = [];
     for (const p of pulls.filter((x) => x.updated_at >= since)) {
-      const reviews = await this.gh.request<Array<{ id: number; body: string; user: GhUser; submitted_at: string; state: string }>>(
+      const reviews = await this.gh.request<Array<{ id: number; body: string; user: GhUser; submitted_at: string; state: string; commit_id?: string }>>(
         "GET",
         `${r(repo)}/pulls/${p.number}/reviews?per_page=50`,
       );
-      for (const rv of reviews)
-        if (rv.body?.trim() && rv.submitted_at >= since)
+      for (const rv of reviews) {
+        if (rv.submitted_at < since) continue;
+        // An approval's body ("LGTM") is not a change request.
+        if (rv.state === "APPROVED") {
+          out.push({ id: `gh-review:${rv.id}`, repo, at: rv.submitted_at, actor: actor(rv.user), type: "pr_approved", prNumber: p.number, headSha: rv.commit_id ?? null, via: "github" });
+          continue;
+        }
+        if (rv.body?.trim())
           out.push({ id: `gh-review:${rv.id}`, repo, at: rv.submitted_at, actor: actor(rv.user), type: "pr_review_comment", prNumber: p.number, body: rv.body, path: null });
+      }
     }
     return out;
   }
@@ -327,6 +346,8 @@ export async function parseWebhook(
     s = { ...base, id: `gh-comment:${p.comment.id}`, type: "issue_comment", issueNumber: p.issue.number, body: p.comment.body ?? "" };
   else if (headers.event === "pull_request_review_comment" && p.action === "created")
     s = { ...base, id: `gh-review-comment:${p.comment.id}`, type: "pr_review_comment", prNumber: p.pull_request.number, body: p.comment.body, path: p.comment.path ?? null };
+  else if (headers.event === "pull_request_review" && p.action === "submitted" && p.review.state === "approved")
+    s = { ...base, id: `gh-review:${p.review.id}`, type: "pr_approved", prNumber: p.pull_request.number, headSha: p.review.commit_id ?? null, via: "github" };
   else if (headers.event === "pull_request_review" && p.action === "submitted" && p.review.body)
     s = { ...base, id: `gh-review:${p.review.id}`, type: "pr_review_comment", prNumber: p.pull_request.number, body: p.review.body, path: null };
   else if (headers.event === "pull_request" && p.action === "closed")
@@ -384,7 +405,8 @@ export const provider = defineProvider({
       const { gh, token, app } = clientFrom(ctx);
       return new GitHubCodeForge(gh, { token, ...(app ? { mint: (repo: RepoRef) => app.taskToken([repo]) } : {}) });
     },
-    chat: (ctx) => new GitHubChat(clientFrom(ctx).gh),
+    // MENTIONS=off (or options.mentions: false) keeps every comment from notifying anyone: for simulated orgs.
+    chat: (ctx) => new GitHubChat(clientFrom(ctx).gh, { mentions: ctx.options.mentions === false || ctx.env.MENTIONS === "off" ? false : true }),
     signals: (ctx) =>
       new GitHubPollingSource(clientFrom(ctx).gh, {
         repos: reposFrom(ctx),

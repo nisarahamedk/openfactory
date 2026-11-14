@@ -29,7 +29,7 @@ How you finish a turn (the factory checks all of this):
 1. Make the change, with tests. Keep it small and in scope.
 2. Commit, then \`git push -u origin ${branch}\` and open the pull request with
    \`gh pr create --base ${baseBranch} --head ${branch} --title "<title>" --body "<what and why>${record.source.issueNumber ? `\\n\\nCloses #${record.source.issueNumber}` : ""}"\`
-   (skip if it's already open). You may comment on your PR with \`gh pr comment\`. Never push to \`${baseBranch}\`; never merge.
+   (skip if it's already open). You may comment on your PR with \`gh pr comment\` (the factory marks your comments as yours, and posts "ready for review" itself, so don't). Never push to \`${baseBranch}\`; never merge.
 3. Deploy your branch to YOUR environment and validate it end to end there (see "Your environment" below). Write or extend e2e tests for the feature.
 4. Provide evidence for your HEAD commit: screenshots of the feature working and the e2e test output.
    Put the files in $HOME/evidence/ and list them in $HOME/evidence/manifest.json as a JSON array of

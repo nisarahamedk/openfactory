@@ -300,6 +300,27 @@ describe("world check", () => {
     return env;
   }
 
+  it("a PR that only changed e2e tests (a UI task) becomes a world-only benchmark", async () => {
+    const { captureOptionsFrom, parseCheckSpec } = await import("./index.js");
+    const { base } = makeOrigin();
+    const prs: PullRequestSource = {
+      mergedPullRequest: async () => ({
+        baseSha: base,
+        mergeSha: "m",
+        files: [
+          { path: "add.js", status: "modified", contentAtMerge: "module.exports = (a, b) => a + b;\n" },
+          { path: "tests/e2e/add.spec.js", status: "added", contentAtMerge: WORLD_TEST },
+        ],
+      }),
+    };
+    const spec = parseCheckSpec(
+      JSON.stringify({ testFilePattern: "^tests/.+\\.test\\.js$", run: ["node"], filter: "append-files", world: { testFilePattern: "^tests/e2e/", run: "node" } }),
+    );
+    const task = await captureBenchmarkTask("task_abc", { ledger: ledgerWith(mergedRecord()), prs, options: captureOptionsFrom(spec), now: "n" });
+    expect(task.check.command).toEqual(["true"]);
+    expect(Object.keys(task.check.world?.files ?? {})).toEqual(["tests/e2e/add.spec.js"]);
+  });
+
   it("capture keeps world tests out of the repo check; replay deploys and runs them in a fresh env", async () => {
     const { captureOptionsFrom, parseCheckSpec } = await import("./index.js");
     const spec = parseCheckSpec(
@@ -343,5 +364,22 @@ describe("world check", () => {
     const task = await captureBenchmarkTask("task_abc", { ledger: ledgerWith(mergedRecord()), prs: worldPrs(base), options: captureOptionsFrom(spec), now: "n" });
     const r = await runAttempt(task, { label: "L", factoryVersion: "L", harness: harness("lazy", 0), workspace: localWorkspace(dir), systemPrompt: "", env: {}, environment: fakeEnvironment('cp add.js "{dir}/deployed.js"') }, 1, { checkTimeoutMs: 10_000 });
     expect(r.checks).toEqual({ repo: false, world: false });
+  });
+});
+
+describe("cost and pass together", () => {
+  const mk = (arm: string, passed: boolean, cost: number, i: number): ArmResult => ({
+    arm, benchmarkTaskId: `b${i % 3}`, factoryVersion: arm, attempt: i, passed, usage: { inputTokens: 0, outputTokens: 0, costUsd: cost }, durationMs: 1, notes: "",
+  });
+  it("same pass rate, B clearly dearer: A is better", () => {
+    const rs = [...Array(9).keys()].flatMap((i) => [mk("A", true, 0.25 + (i % 3) * 0.01, i), mk("B", true, 0.37 + (i % 3) * 0.01, i)]);
+    const r = compareArms(rs, "A", "B");
+    expect(r.verdict).toBe("a_better");
+    expect(r.costRatio!.low).toBeGreaterThan(1.1);
+    expect(r.summary).toMatch(/costs less/);
+  });
+  it("B passes more but each pass costs more: a trade-off", () => {
+    const rs = [...Array(12).keys()].flatMap((i) => [mk("A", i % 2 === 0, 0.1, i), mk("B", true, 0.5, i)]);
+    expect(compareArms(rs, "A", "B").verdict).toBe("trade_off");
   });
 });

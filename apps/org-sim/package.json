@@ -1,0 +1,9 @@
+{
+  "name": "@openfactory/org-sim",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": { "org-sim": "dist/main.js" },
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "vitest run --passWithNoTests" },
+  "dependencies": { "@openfactory/client": "workspace:*", "@openfactory/cloudevents": "workspace:*", "@openfactory/contracts": "workspace:*" }
+}

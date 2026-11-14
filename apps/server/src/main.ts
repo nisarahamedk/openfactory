@@ -8,24 +8,26 @@ import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
 import { GitHubClient, githubAppFromEnv, parseWebhook } from "@openfactory/github";
-import { teamFor, type RepoRef, type AgentHarness, type CodeForge, type Directory, type MetricsSink, type OutcomeSource, type Signal, type Team, type TaskId, type WorldCheck } from "@openfactory/contracts";
+import { teamFor, type RepoRef, type AgentHarness, type CodeForge, type Directory, type MetricsSink, type OutcomeSource, type Signal, type Team, type TaskId, type WorldCheck, type WorkspaceHandle } from "@openfactory/contracts";
 import { globToRegex } from "@openfactory/rules";
 import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfactory/foreman";
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
-import { promptTemplates, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps } from "@openfactory/task-job";
+import { admitted, applyBundle, bundleMcp, promptTemplates, WorkSlots, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps } from "@openfactory/task-job";
 import { fileEvidenceStore, createApp } from "./app.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
 import { Health } from "./health.js";
-import { cachedDirectory, configDirectory, factoryViews, loadOrgConfig } from "./org.js";
+import { cachedDirectory, configDirectory, factoryViews, loadOrgConfig, type FactoryDef } from "./org.js";
+import { tellThreads } from "./replies.js";
+import { createOrgRoutes, mergeTeams } from "./org-api.js";
 import { loadFactoryExtras, loadModelRouting, loadOutcomeConfig, loadSelections, ProviderRegistry } from "./registry.js";
 
 const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), msg, ...fields }));
 
 async function main() {
   const cfg = loadConfig(process.env);
-  const { ledger, app: store, jobs: jobLog, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
+  const { ledger, app: store, jobs: jobLog, org: orgStore, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
 
   // A GitHub App when configured (scoped, 1-hour tokens per task), else the PAT.
   const ghApp = githubAppFromEnv(process.env);
@@ -66,7 +68,12 @@ async function main() {
     ? { check: await registry.buildOptional<WorldCheck>("worldCheck", { name: extras.world.provider, options: extras.world.options }), world: extras.world.name, simDays: extras.world.simDays }
     : null;
   log("world check", { world: world ? `${world.world} (${world.simDays} days)` : null });
-  const workspace = need(p.workspace, "workspace");
+  // Admission control: live tasks and benchmark replays share MAX_AWAKE_WORKSPACES slots (default 4); the rest wait in line.
+  const slots = new WorkSlots(Math.max(1, Number(process.env.MAX_AWAKE_WORKSPACES ?? 4)));
+  const workspace = admitted(need(p.workspace, "workspace"), slots, async (taskId, position) => {
+    log("queued for a workspace", { taskId, position, slots: slots.slots });
+    if (await ledger.getTask(taskId).catch(() => null)) await ledger.append(taskId, "queued", { position, slots: slots.slots }).catch(() => undefined);
+  });
   const environment = need(p.devEnvironment, "devEnvironment");
   const forge = need(p.codeForge, "codeForge");
   // The agent's per-task repo token comes from Secrets when configured (scoped to the task's repo), else the forge.
@@ -93,8 +100,14 @@ async function main() {
   // Team factories (factory.yaml `factories:`): each may name its own world and merge-risk paths.
   const org = loadOrgConfig(cfg.FACTORY_FILE);
   const globs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").map(globToRegex) : []);
-  const teamFactories = Object.fromEntries(
-    Object.entries(org.factories).map(([slug, f]) => [
+  /** factory.yaml factories plus the team factories made in the app (factory.yaml wins on a clash). */
+  const allFactoryDefs = async (): Promise<Record<string, FactoryDef>> => {
+    const made = await orgStore.factories().catch(() => []);
+    const fromApp = Object.fromEntries(made.map((f) => [f.slug, { extends: f.extends, description: f.description ?? undefined, scorers: f.scorers, benchmarks: f.benchmarks, world: f.world ?? undefined, mergeRisk: f.mergeRisk ?? undefined } as FactoryDef]));
+    return { ...fromApp, ...org.factories };
+  };
+  const runtimeFactories = (defs: Record<string, FactoryDef>) => Object.fromEntries(
+    Object.entries(defs).map(([slug, f]) => [
       slug,
       {
         ...(f.world !== undefined ? { world: f.world ? { world: f.world, simDays: extras.world?.simDays ?? 30 } : null } : {}),
@@ -104,6 +117,12 @@ async function main() {
       },
     ]),
   );
+  const teamFactories: Record<string, object> = runtimeFactories(await allFactoryDefs());
+  // Team factories made in the app take effect on new tasks within a minute.
+  const factoryTimer = setInterval(() => {
+    void allFactoryDefs().then((d) => Object.assign(teamFactories, runtimeFactories(d))).catch(() => {});
+  }, 60_000);
+  factoryTimer.unref();
   const routedModels = [
     cfg.WORKER_MODEL,
     ...(modelRouting ? [modelRouting.default, ...modelRouting.routes.map((r) => r.model)] : []),
@@ -148,7 +167,7 @@ async function main() {
       factories: teamFactories,
       sinks,
       preflight: (task) => health.forTask(task),
-      config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/", risk: extras.risk, versionPrompts: extras.versionPrompts },
+      config: { baseBranch: cfg.BASE_BRANCH, workerImage: cfg.WORKER_IMAGE ?? null, agentEnv: cfg.agentEnv, maxNudges: cfg.MAX_NUDGES, branchPrefix: "factory/", risk: extras.risk, versionPrompts: extras.versionPrompts, versionBundles: extras.versionBundles },
       log,
   };
   const jobs = new TaskJobs(
@@ -171,7 +190,7 @@ async function main() {
       versionModels: extras.versionModels,
       knownRepos: cfg.repos,
       factoryOf: async (t) => {
-        const team = teamFor(await directory.teams(), t);
+        const team = teamFor(await allTeams(), t);
         return { factory: team?.factory ?? "default", team: team?.slug ?? null };
       },
     },
@@ -233,18 +252,32 @@ async function main() {
   const bench = cfg.BENCH_DIR
     ? createBenchRoutes({
         ledger,
-        prs: new GitHubPullRequestSource(serverToken),
+        prs: new GitHubPullRequestSource(serverToken, fetch, "https://api.github.com", process.env.BENCH_ACCEPT_UNMERGED === "1"),
         store: new FileBenchStore(cfg.BENCH_DIR),
         captureOptions: cfg.BENCH_CHECK_JSON ? captureOptionsFrom(parseCheckSpec(cfg.BENCH_CHECK_JSON)) : defaultCaptureOptions,
-        armFor: (spec) => ({
+        armFor: (spec) => {
+          const bundle = extras.versionBundles[spec.factoryVersion];
+          const versionNote = [extras.versionPrompts[spec.factoryVersion], bundle?.prompt].filter(Boolean).join("\n\n");
+          return {
+          ...(bundle
+            ? {
+                prepare: async (ws: WorkspaceHandle, cwd: string) => {
+                  const r = await applyBundle(ws, cwd, bundle);
+                  if (!r.ok) log("version bundle not fully applied (bench)", { version: spec.factoryVersion, stderr: r.stderr.slice(0, 300) });
+                },
+                mcpServers: bundleMcp(bundle),
+                ...(bundle.effort ? { effort: bundle.effort } : {}),
+              }
+            : {}),
           label: spec.label,
           factoryVersion: spec.factoryVersion,
           harness: agentFor(spec.model),
           workspace,
-          systemPrompt: spec.systemPrompt || "You are a careful software engineer. Do the task, with tests.",
+          systemPrompt: [spec.systemPrompt || "You are a careful software engineer. Do the task, with tests.", versionNote].filter(Boolean).join("\n\n"),
           env: { ...cfg.agentEnv, ANTHROPIC_MODEL: spec.model },
           environment, // world checks deploy each attempt into its own fresh environment
-        }),
+          };
+        },
         maxCostUsdPerRun: cfg.BENCH_MAX_USD_PER_RUN,
         now: () => new Date().toISOString(),
       })
@@ -261,6 +294,7 @@ async function main() {
     foreman: { model: cfg.FOREMAN_MODEL },
     modelRouting,
     rollout: extras.rollout,
+    versions: Object.fromEntries(Object.entries(extras.versionBundles).map(([id, b]) => [id, { label: extras.versionLabels[id] ?? null, prompt: extras.versionPrompts[id] ?? null, models: extras.versionModels[id] ?? null, effort: b.effort ?? null, agentsMd: b.agentsMd ?? null, skills: b.skills.map((x) => x.name), mcp: b.mcp.map((x) => x.name), codegraph: b.codegraph }])),
     rules: { label: cfg.FACTORY_LABEL, maxTaskUsd: cfg.MAX_TASK_USD, maxReviewRounds: cfg.MAX_REVIEW_ROUNDS, maxNudges: cfg.MAX_NUDGES },
     prompts: { ...promptTemplates(cfg.BASE_BRANCH), foreman: FOREMAN_INSTRUCTIONS },
   });
@@ -283,6 +317,11 @@ async function main() {
       60_000,
     );
   log("teams from", { directory: directory.name });
+  /** The directory's teams plus the teams made in the app. */
+  const allTeams = async () => mergeTeams(await directory.teams(), await orgStore.teams().catch(() => []));
+
+  /** Simulated orgs use made-up logins: never @-mention them on GitHub, where a real user may own the name. */
+  const mention = (login: string) => (process.env.MENTIONS === "off" ? `\`${login}\`` : `@${login}`);
 
   /** A person writes to a task from the app: post it where the task lives, record it, and hand it to the job as a comment. */
   const message = async (id: TaskId, author: string, text: string) => {
@@ -290,7 +329,7 @@ async function main() {
     if (!t) return null;
     const target = t.pr?.number ?? t.source.issueNumber;
     let url: string | null = null;
-    if (target !== null) url = (await chat.post({ repo: t.source.repo, issueOrPr: target }, `**@${author}** wrote in the factory app:\n\n${text}`)).url;
+    if (target !== null) url = (await chat.post({ repo: t.source.repo, issueOrPr: target }, `**${mention(author)}** wrote in the factory app:\n\n${text}`)).url;
     const at = new Date().toISOString();
     const mid = `app:${id}:${Date.now().toString(36)}`;
     await ledger.append(id, "message_received", { author, text, url }, { dedupeKey: `msg:${mid}` });
@@ -298,31 +337,76 @@ async function main() {
     return { task: (await ledger.getTask(id))!, url };
   };
 
+  /** A person approves the PR from the app (or Slack/Teams via the org intake): post it on the PR and record it. */
+  const approve = async (id: TaskId, by: string, note?: string) => {
+    const t = await ledger.getTask(id);
+    if (!t) return null;
+    if (!t.pr || (t.status !== "awaiting_review" && t.status !== "iterating")) throw new Error(`task is ${t.status}; only a PR in review can be approved`);
+    const head = t.pr.headSha;
+    await chat.post({ repo: t.source.repo, issueOrPr: t.pr.number }, `**${mention(by)}** approved${head ? ` \`${head.slice(0, 7)}\`` : ""} in the factory app.${note ? `\n\n${note}` : ""}`);
+    await onSignal({ type: "pr_approved", id: `app-approve:${id}:${by}:${head ?? "nohead"}`, repo: t.source.repo, at: new Date().toISOString(), actor: { login: by, isBot: false }, prNumber: t.pr.number, headSha: head, via: "app" });
+    return ledger.getTask(id);
+  };
+
   /** A person asks for a task in the app: open a labelled issue where the work belongs, then start it. */
-  const ask = async (input: { ask: string; repo: string | null; requestedBy: string }) => {
+  const ask = async (input: { ask: string; repo: string | null; requestedBy: string; origin?: { label: string; url: string | null } | null; labels?: string[]; team?: string | null }) => {
     const known = cfg.repos.map((r) => `${r.owner}/${r.name}`);
-    const teamRepo = (await directory.teams()).find((t) => t.members.some((m) => m.login === input.requestedBy))?.repos.find((r) => known.includes(r));
+    const teams = await allTeams();
+    const teamRepo = (teams.find((t) => t.slug === input.team) ?? teams.find((t) => t.members.some((m) => m.login === input.requestedBy)))?.repos.find((r) => known.includes(r));
     const repoName = input.repo ?? teamRepo ?? known[0];
     if (!repoName || !known.includes(repoName)) throw new Error(`The factory doesn't work in ${repoName ?? "any repo"} yet. Add it to FACTORY_REPOS.`);
     const [owner, name] = repoName.split("/") as [string, string];
     const repo = { host: "github" as const, owner, name };
     const title = input.ask.split("\n")[0]!.trim().slice(0, 120) || "Task from the factory app";
-    const body = `${input.ask}\n\n_Asked by @${input.requestedBy} in the factory app._`;
-    const issue = await gh.request<{ number: number; html_url: string }>("POST", `/repos/${owner}/${name}/issues`, { title, body, labels: [cfg.FACTORY_LABEL] });
-    await onSignal({ type: "issue_labeled", id: `app-new:${repoName}#${issue.number}`, repo, at: new Date().toISOString(), actor: { login: input.requestedBy, isBot: false }, issueNumber: issue.number, label: cfg.FACTORY_LABEL, title, body, labels: [cfg.FACTORY_LABEL] });
+    const where = input.origin ? (input.origin.url ? `[${input.origin.label}](${input.origin.url})` : input.origin.label) : "the factory app";
+    const body = `${input.ask}\n\n_Asked by ${mention(input.requestedBy)} in ${where}._`;
+    const labels = [cfg.FACTORY_LABEL, ...(input.labels ?? []).filter((l) => l !== cfg.FACTORY_LABEL)];
+    const issue = await gh.request<{ number: number; html_url: string }>("POST", `/repos/${owner}/${name}/issues`, { title, body, labels });
+    await onSignal({ type: "issue_labeled", id: `app-new:${repoName}#${issue.number}`, repo, at: new Date().toISOString(), actor: { login: input.requestedBy, isBot: false }, issueNumber: issue.number, label: cfg.FACTORY_LABEL, title, body, labels });
     return { issueUrl: issue.html_url, repo: repoName, issueNumber: issue.number };
   };
 
+  const orgRoutes = createOrgRoutes({
+    store: orgStore,
+    ledger,
+    ask,
+    onSignal,
+    addOutcome: async (taskId, outcome, ref, source) => {
+      const r = await ledger.append(taskId, "outcome_added", { outcome }, { dedupeKey: `outcome:${source}:${taskId}:${outcome.kind}:${ref}`, at: outcome.arrivedAt });
+      if (r.appended) await scoreAndExport(jobDeps, taskId).catch((e) => log("rescore failed", { taskId, error: String(e) }));
+      return r.appended;
+    },
+    repos: () => cfg.repos,
+    factoryLabel: cfg.FACTORY_LABEL,
+    now: () => new Date().toISOString(),
+    log,
+  });
+
+  // Answer askers in their own Slack/Teams thread or Jira ticket as their task moves (every 20s).
+  const replyTimer = setInterval(() => {
+    tellThreads({
+      store: orgStore,
+      ledger,
+      appUrl: process.env.DASHBOARD_PUBLIC_URL ?? null,
+      ceSource: process.env.FACTORY_PUBLIC_URL ?? "openfactory",
+      now: () => new Date().toISOString(),
+      log,
+    }).catch((e) => log("replies failed", { error: String(e) }));
+  }, 20_000);
+  replyTimer.unref();
+
   const app = createApp({
+    org: orgRoutes,
     ledger,
     store,
     ask,
-    teams: () => directory.teams(),
-    factories: async () => factoryViews(org.factories, await directory.teams()),
+    teams: allTeams,
+    factories: async () => factoryViews(await allFactoryDefs(), await allTeams()),
     message,
     factory: factoryInfo,
     cancel: (id, by, reason) => onCancel(id, by, reason),
     retry: (id, by) => onRetry(id, by),
+    approve,
     health: () => health.current(),
     onSignal,
     evidence,
@@ -346,6 +430,7 @@ async function main() {
   const shutdown = async () => {
     log("shutting down");
     clearInterval(healthTimer);
+    clearInterval(factoryTimer);
     await poller?.stop();
     await outcomeWatch?.stop();
     server.close();

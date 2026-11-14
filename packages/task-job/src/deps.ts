@@ -9,6 +9,7 @@ import type {
   Scorer,
   TaskRecord,
   Workspace,
+  VersionBundle,
 } from "@openfactory/contracts";
 import type { Ledger } from "@openfactory/ledger";
 import type { RiskConfig, RulesConfig } from "@openfactory/rules";
@@ -59,6 +60,8 @@ export type JobDeps = {
     risk?: RiskConfig | null;
     /** Extra system-prompt text per factory version (how a candidate version differs). */
     versionPrompts?: Record<string, string>;
+    /** What each factory version gives the agent: skills, AGENTS.md guidance, MCP tools, effort, CodeGraph. */
+    versionBundles?: Record<string, VersionBundle>;
     /** Delays before each automatic retry of a passing failure (network, 429, 5xx). Default 5 s, 30 s, 2 min. */
     retryDelaysMs?: number[];
   };

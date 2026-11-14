@@ -42,6 +42,6 @@ const orNull = (v: string) => (v === "none" ? null : v);
 const api = new FactoryApi({ baseUrl: env.FACTORY_API_URL, token: orNull(env.FACTORY_API_TOKEN) });
 const auth = authFromEnv(process.env);
 if (!auth && env.DASHBOARD_PASSWORD === undefined) throw new Error('Set AUTH_PROVIDER (sign-in) or DASHBOARD_PASSWORD ("none" to run open, dev only).');
-serve({ fetch: createDashboard(api, { auth, password: env.DASHBOARD_PASSWORD === undefined ? null : orNull(env.DASHBOARD_PASSWORD), models: [env.DASHBOARD_MODELS.split(",")[0] ?? "", env.DASHBOARD_MODELS.split(",")[1] ?? ""], factoryName: env.DASHBOARD_FACTORY_NAME, mcpUrl: env.FACTORY_PUBLIC_URL ? `${env.FACTORY_PUBLIC_URL.replace(/\/$/, "")}/mcp` : null }).fetch, port: env.DASHBOARD_PORT }, (info) => {
+serve({ fetch: createDashboard(api, { auth, password: env.DASHBOARD_PASSWORD === undefined ? null : orNull(env.DASHBOARD_PASSWORD), models: [env.DASHBOARD_MODELS.split(",")[0] ?? "", env.DASHBOARD_MODELS.split(",")[1] ?? ""], factoryName: env.DASHBOARD_FACTORY_NAME, mcpUrl: env.FACTORY_PUBLIC_URL ? `${env.FACTORY_PUBLIC_URL.replace(/\/$/, "")}/mcp` : null, publicApiUrl: env.FACTORY_PUBLIC_URL ?? null }).fetch, port: env.DASHBOARD_PORT }, (info) => {
   console.log(`dashboard listening on :${info.port}`);
 });

@@ -18,6 +18,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   ABSTRACTION_KEYS,
+  VersionBundle,
   type AbstractionKey,
   type Abstractions,
   type Environment,
@@ -149,7 +150,7 @@ const ExtrasFile = z
     /** A candidate factory version for a share of new tasks. */
     rollout: z.object({ candidate: z.string().min(1).nullable().default(null), share: z.number().min(0).max(1).default(0) }).optional(),
     /** How each version differs: extra prompt text, other model routing. */
-    versions: z.record(z.string(), z.object({ prompt: z.string().optional(), models: Routing.optional() })).default({}),
+    versions: z.record(z.string(), VersionBundle.extend({ label: z.string().optional(), models: Routing.optional() })).default({}),
     /** The world check run against each settled PR head: a provider package that provides `worldCheck`. */
     world: z
       .object({ provider: z.string().min(1), name: z.string().min(1), simDays: z.number().int().positive().default(30), options: z.record(z.string(), z.unknown()).default({}) })
@@ -163,6 +164,10 @@ export type FactoryExtras = {
   rollout: Rollout | null;
   versionPrompts: Record<string, string>;
   versionModels: Record<string, ModelRouting>;
+  /** Each version's bundle (skills, AGENTS.md guidance, MCP tools, effort, CodeGraph). */
+  versionBundles: Record<string, VersionBundle>;
+  /** Each version's human label, when factory.yaml gives one. */
+  versionLabels: Record<string, string>;
   risk: RiskConfig;
   world: { provider: string; name: string; simDays: number; options: Record<string, unknown> } | null;
 };
@@ -172,21 +177,36 @@ export type FactoryExtras = {
  *
  *   rollout: { candidate: "2026-11-14.1", share: 0.1 }
  *   versions:
- *     "2026-11-14.1": { prompt: "Write the e2e test before the code.", models: { default: claude-sonnet, routes: [] } }
+ *     "2026-11-14.1":
+ *       label: e2e-first
+ *       prompt: Write the e2e test before the code.
+ *       models: { default: claude-sonnet, routes: [] }      # routing policy is part of the version
+ *       effort: low                                          # reasoning effort
+ *       agentsMd: Keep PRs under 200 lines.                  # extra AGENTS.md guidance (CLAUDE.local.md)
+ *       skills: [{ name: pricing-faq, description: ..., body: ... }]
+ *       mcp: [{ name: docs, command: npx, args: [...] }]     # MCP tools
+ *       codegraph: true                                      # CodeGraph index + MCP tool
  *   risk: { riskyPaths: ["(^|/)migrations/"], mediumLines: 200, highLines: 800 }
  */
 export function loadFactoryExtras(stableVersion: string, path?: string): FactoryExtras {
   const doc = path && existsSync(path) ? ExtrasFile.parse(parse(readFileSync(path, "utf8")) ?? {}) : ExtrasFile.parse({});
   const versionPrompts: Record<string, string> = {};
   const versionModels: Record<string, ModelRouting> = {};
+  const versionBundles: Record<string, VersionBundle> = {};
+  const versionLabels: Record<string, string> = {};
   for (const [v, spec] of Object.entries(doc.versions)) {
-    if (spec.prompt) versionPrompts[v] = spec.prompt;
-    if (spec.models) versionModels[v] = spec.models;
+    const { models, label, prompt, ...bundle } = spec;
+    if (prompt) versionPrompts[v] = prompt;
+    if (models) versionModels[v] = models;
+    if (label) versionLabels[v] = label;
+    versionBundles[v] = VersionBundle.parse(bundle);
   }
   return {
     rollout: doc.rollout?.candidate ? { stable: stableVersion, candidate: doc.rollout.candidate, share: doc.rollout.share } : null,
     versionPrompts,
     versionModels,
+    versionBundles,
+    versionLabels,
     risk: { ...DEFAULT_RISK, ...(doc.risk ?? {}) },
     world: doc.world ?? null,
   };

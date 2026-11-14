@@ -17,6 +17,7 @@ ARG HELM_VERSION=v3.11.1
 ARG HELM_SHA256=0b1be96b66fab4770526f136f5f1a385a47c41923d33aab0dcb500e0f6c1bf7c
 ARG PLAYWRIGHT_VERSION=1.56.1
 ARG GH_VERSION=2.83.0
+ARG CODEGRAPH_VERSION=1.6.2
 ARG GH_SHA256=a5cf6cdb40fc67751adf561126b3314044779cea81ba4f254fbe8e9a69f1676f
 
 # Node 22.21+ so Node's own fetch and https honour the egress proxy variables
@@ -36,8 +37,12 @@ RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERS
  && curl -fsSLo /tmp/gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
  && echo "${GH_SHA256}  /tmp/gh.tgz" | sha256sum -c - \
  && tar -xzf /tmp/gh.tgz -C /tmp \
- && mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
+ && mkdir -p /usr/local/lib \
+ && mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/lib/gh-real \
  && rm -rf /tmp/gh.tgz "/tmp/gh_${GH_VERSION}_linux_amd64"
+
+# gh is a thin wrapper that adds the factory marker to every comment the agent writes (see gh-mark.sh).
+COPY --chmod=755 gh-mark.sh /usr/local/bin/gh
 
 # Helm at the version DevSpace would otherwise download at deploy time, so the
 # sandbox needs no route to get.helm.sh.
@@ -47,7 +52,8 @@ RUN curl -fsSLo /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-am
  && mv /tmp/linux-amd64/helm /usr/local/bin/helm \
  && rm -rf /tmp/helm.tgz /tmp/linux-amd64
 
-RUN npm install -g "pnpm@${PNPM_VERSION}" "@agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}" \
+# CodeGraph: a code index with one MCP tool; factory versions with `codegraph: true` use it to read less.
+RUN npm install -g "pnpm@${PNPM_VERSION}" "@agentclientprotocol/claude-agent-acp@${CLAUDE_AGENT_ACP_VERSION}" "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" \
  && npm cache clean --force
 
 # Git identity for the agent's commits. The task job writes a per-task repo
@@ -68,7 +74,12 @@ ENV IS_SANDBOX=1 \
 # this is a no-op; with a different pin it downloads that version's browsers
 # (system libraries come from the base image, so no apt step).
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install chromium \
+ && npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
  && npm cache clean --force
+
+# factory-evidence: wait for the env, take desktop + phone screenshots, keep test output, and write the
+# evidence manifest for HEAD the way the factory checks it.
+COPY --chmod=755 factory-evidence.mjs /usr/local/bin/factory-evidence
 
 WORKDIR /work
 CMD ["sleep", "infinity"]

@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import type { AgentHarness, BenchmarkTask, Environment, EnvironmentHandle, ReplayResult, TaskId, Usage, Workspace, WorkspaceHandle } from "@openfactory/contracts";
+import type { AgentHarness, Effort, McpServer, BenchmarkTask, Environment, EnvironmentHandle, ReplayResult, TaskId, Usage, Workspace, WorkspaceHandle } from "@openfactory/contracts";
 
 /** One side of an A-vs-B comparison: a factory version and the plugins it implies. */
 export interface ReplayArm {
@@ -16,6 +16,11 @@ export interface ReplayArm {
    * Null or absent: world checks are skipped (recorded as world: null).
    */
   environment?: Environment | null;
+  /** The factory version's bundle, put in place in the checkout before the agent starts (skills, AGENTS.md, index). */
+  prepare?: (ws: WorkspaceHandle, cwd: string) => Promise<void>;
+  /** The factory version's MCP tools and effort. */
+  mcpServers?: McpServer[];
+  effort?: Effort;
 }
 
 const REPLAY_PREAMBLE =
@@ -77,12 +82,15 @@ export async function runAttempt(task: BenchmarkTask, arm: ReplayArm, attempt: n
       skill = `\n\n${await env.skill()}`;
     }
 
+    if (arm.prepare) await arm.prepare(ws, cwd);
     const session = await arm.harness.openSession({
       workspace: ws,
       cwd,
       systemPrompt: `${arm.systemPrompt}\n\n${REPLAY_PREAMBLE}${skill}`,
       resumeSessionId: null,
       env: { ...arm.env, ...envVars },
+      ...(arm.mcpServers?.length ? { mcpServers: arm.mcpServers } : {}),
+      ...(arm.effort ? { effort: arm.effort } : {}),
     });
     let turnNote = "";
     try {

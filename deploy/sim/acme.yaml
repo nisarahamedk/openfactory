@@ -1,0 +1,145 @@
+# Acme: a simulated org on the same VM as the live factory, with its own database (acme), data volume,
+# factory label ("acme") and hosts, so its fake people, Slack, Jira and incidents never touch the live
+# factory's numbers. It shares the cluster's LiteLLM (same budget), workspaces namespace and egress proxy.
+#   kubectl -n factory exec postgres-0 -- psql -U factory -c 'CREATE DATABASE acme'
+#   kubectl -n factory create configmap acme-factory --from-file=factory.yaml=deploy/sim/factory.yaml
+#   kubectl apply -f deploy/sim/acme.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: acme-data, namespace: factory }
+spec: { accessModes: [ReadWriteOnce], storageClassName: local-path, resources: { requests: { storage: 3Gi } } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: acme-server, namespace: factory, labels: { org: acme } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: acme-server } }
+  template:
+    metadata: { labels: { app: acme-server, org: acme } }
+    spec:
+      serviceAccountName: openfactory
+      containers:
+        - name: server
+          image: openfactory:e980734
+          imagePullPolicy: IfNotPresent
+          args: ["apps/server/dist/main.js"]
+          ports: [{ containerPort: 3000, name: http }]
+          env:
+            - { name: PORT, value: "3000" }
+            - { name: PUBLIC_URL, value: "https://acme-factory.178.105.22.96.sslip.io" }
+            - { name: DATA_DIR, value: /data }
+            - { name: BENCH_DIR, value: /data/bench }
+            - { name: BENCH_ACCEPT_UNMERGED, value: "1" }
+            - { name: FACTORY_FILE, value: /etc/factory/factory.yaml }
+            - { name: FACTORY_VERSION, value: acme-v1 }
+            - { name: FACTORY_LABEL, value: acme }
+            - { name: FACTORY_REPOS, value: nisarahamedk/firstword }
+            - { name: MAX_TASK_USD, value: "2" }
+            # Workspaces use ~0.5Gi; a 2Gi request left no room for a task's preview env on the 8GB VM.
+            - { name: WORKSPACE_MEMORY, value: "1Gi" }
+            # 8GB/4-vCPU VM: three awake workspaces (each may burst to 6Gi during installs and typechecks) stalled the node
+            # on 2026-11-14 (probes timing out, API 503s, an agent OOM-killed). Two fit; more wait in line.
+            - { name: MAX_AWAKE_WORKSPACES, value: "2" }
+            # Cap each workspace so two can never take the whole node (the agent was SIGKILLed by the node OOM killer).
+            - { name: WORKSPACE_MEMORY_LIMIT, value: "3Gi" }
+            - { name: MENTIONS, value: "off" }
+            - { name: MODEL_PROXY_URL, value: "http://litellm.factory.svc:4000" }
+            - { name: FOREMAN_MODEL, value: claude-haiku }
+            - { name: WORKER_MODEL, value: claude-haiku }
+            # The env deploy (devspace dev) never exits: start it in the background and wait for the URL.
+            - name: BENCH_CHECK_JSON
+              value: '{"testFilePattern":"^tests/[^/]+\\.test\\.ts$","run":["pnpm","test"],"filter":"delete-others","testDir":"tests","testSuffix":".test.ts","world":{"testFilePattern":"^tests/e2e/.+\\.spec\\.ts$","run":"STAGE_URL=\"$FACTORY_ENV_URL\" pnpm exec playwright test","deploy":"(eval \"$FACTORY_ENV_DEPLOY\" > \"$HOME/deploy.log\" 2>&1 &); factory-evidence wait --timeout 900 || { tail -40 \"$HOME/deploy.log\"; exit 1; }"}}'
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: postgres, key: POSTGRES_PASSWORD } }
+            - { name: DATABASE_URL, value: "postgres://factory:$(POSTGRES_PASSWORD)@postgres.factory.svc:5432/acme" }
+            - name: GITHUB_TOKEN
+              valueFrom: { secretKeyRef: { name: github, key: GITHUB_TOKEN } }
+            - name: MODEL_PROXY_KEY
+              valueFrom: { secretKeyRef: { name: litellm, key: LITELLM_FACTORY_KEY } }
+            - name: FACTORY_API_TOKEN
+              valueFrom: { secretKeyRef: { name: factory-api, key: FACTORY_API_TOKEN } }
+            - { name: WORKER_IMAGE, value: "openfactory-worker:acme" }
+            - { name: FACTORY_DOMAIN, value: "178.105.22.96.sslip.io" }
+            - { name: WORKSPACE_NAMESPACE, value: "factory-workspaces" }
+            - { name: ENV_APP_URL_TEMPLATE, value: "https://{namespace}.178.105.22.96.sslip.io" }
+            - { name: ENV_COPY_SECRETS, value: "factory/firstword-dev" }
+            - { name: ENV_AGENT_VARS, value: "FACTORY_DOMAIN=178.105.22.96.sslip.io,FIRSTWORD_REMOTE_BINDINGS=off,WRANGLER_SEND_METRICS=false" }
+            - { name: ENV_DEPLOY_COMMAND, value: "devspace dev --namespace {namespace}" }
+            - { name: LITELLM_ADMIN_URL, value: "http://litellm.factory.svc:4000" }
+            - name: LITELLM_MASTER_KEY
+              valueFrom: { secretKeyRef: { name: litellm, key: LITELLM_MASTER_KEY } }
+            - { name: WORKSPACE_EGRESS_PROXY, value: "http://egress-proxy.factory-egress.svc:3128" }
+            - { name: WORKSPACE_NO_PROXY, value: "localhost,127.0.0.1,::1,.svc,.cluster.local,10.43.0.0/16" }
+            - { name: TASK_KEY_MODELS, value: "claude-sonnet,claude-haiku" }
+            - name: WORKSPACE_GIT_TOKEN
+              valueFrom: { secretKeyRef: { name: github, key: GITHUB_TOKEN } }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: factory, mountPath: /etc/factory }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          resources: { requests: { cpu: 50m, memory: 200Mi }, limits: { memory: 768Mi } }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: acme-data } }
+        - { name: factory, configMap: { name: acme-factory } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: acme-server, namespace: factory }
+spec: { selector: { app: acme-server }, ports: [{ port: 3000, targetPort: http, name: http }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: acme-dashboard, namespace: factory, labels: { org: acme } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: acme-dashboard } }
+  template:
+    metadata: { labels: { app: acme-dashboard, org: acme } }
+    spec:
+      containers:
+        - name: dashboard
+          image: openfactory:e980734
+          imagePullPolicy: IfNotPresent
+          args: ["apps/dashboard/dist/main.js"]
+          ports: [{ containerPort: 8080, name: http }]
+          env:
+            - { name: DASHBOARD_PORT, value: "8080" }
+            - { name: FACTORY_API_URL, value: "http://acme-server.factory.svc:3000" }
+            - { name: FACTORY_PUBLIC_URL, value: "https://acme-factory.178.105.22.96.sslip.io" }
+            - { name: DASHBOARD_MODELS, value: "claude-haiku,claude-sonnet" }
+            - { name: DASHBOARD_FACTORY_NAME, value: acme }
+            - name: FACTORY_API_TOKEN
+              valueFrom: { secretKeyRef: { name: factory-api, key: FACTORY_API_TOKEN } }
+            - name: DASHBOARD_PASSWORD
+              valueFrom: { secretKeyRef: { name: dashboard, key: DASHBOARD_PASSWORD } }
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { memory: 256Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: acme-dashboard, namespace: factory }
+spec: { selector: { app: acme-dashboard }, ports: [{ port: 8080, targetPort: http, name: http }] }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: acme
+  namespace: factory
+  annotations: { traefik.ingress.kubernetes.io/router.tls.certresolver: le }
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: acme-factory.178.105.22.96.sslip.io
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: acme-server, port: { number: 3000 } } } }] }
+    - host: acme.178.105.22.96.sslip.io
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: acme-dashboard, port: { number: 8080 } } } }] }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-ingress-controller-acme, namespace: factory }
+spec:
+  podSelector: { matchExpressions: [{ key: app, operator: In, values: [acme-server, acme-dashboard] }] }
+  policyTypes: [Ingress]
+  ingress: [{ from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }] }]
