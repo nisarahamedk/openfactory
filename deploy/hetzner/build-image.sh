@@ -1,7 +1,8 @@
 #!/bin/bash
 # Build an image from a public git ref inside the cluster and load it into k3s containerd.
 # No registry: BuildKit (daemonless) writes a docker tar to a hostPath, then a privileged
-# step imports it with the host's `k3s ctr`. Pods then use the tag with imagePullPolicy: IfNotPresent.
+# step imports it with the host's `k3s ctr` and pins it, so kubelet image GC (which runs under disk pressure and
+# removes images no pod is using, such as the worker image between tasks) keeps it. Pods use imagePullPolicy: IfNotPresent.
 #   build-image.sh <git-url#ref> <dockerfile path in repo> <image:tag> [context subdir]
 set -euo pipefail
 SRC=$1; DOCKERFILE=$2; TAG=$3; SUBDIR=${4:-}
@@ -38,7 +39,7 @@ spec:
         - name: import
           image: alpine:3.22
           securityContext: { privileged: true }
-          command: [sh, -c, "nsenter -t 1 -m -- k3s ctr -n k8s.io images import /var/lib/factory-images/$name.tar && rm -f /out/$name.tar && echo imported $TAG"]
+          command: [sh, -c, "nsenter -t 1 -m -- k3s ctr -n k8s.io images import /var/lib/factory-images/$name.tar && nsenter -t 1 -m -- k3s ctr -n k8s.io images label docker.io/library/$TAG io.cri-containerd.pinned=pinned >/dev/null && rm -f /out/$name.tar && echo imported $TAG"]
           volumeMounts: [{ name: out, mountPath: /out }]
       volumes:
         - { name: out, hostPath: { path: /var/lib/factory-images, type: DirectoryOrCreate } }
