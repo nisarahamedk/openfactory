@@ -315,7 +315,7 @@ async function main() {
   const allTeams = async () => mergeTeams(await directory.teams(), await orgStore.teams().catch(() => []));
 
   /** Simulated orgs use made-up logins: never @-mention them on GitHub, where a real user may own the name. */
-  const at = (login: string) => (process.env.MENTIONS === "off" ? `\`${login}\`` : `@${login}`);
+  const mention = (login: string) => (process.env.MENTIONS === "off" ? `\`${login}\`` : `@${login}`);
 
   /** A person writes to a task from the app: post it where the task lives, record it, and hand it to the job as a comment. */
   const message = async (id: TaskId, author: string, text: string) => {
@@ -323,7 +323,7 @@ async function main() {
     if (!t) return null;
     const target = t.pr?.number ?? t.source.issueNumber;
     let url: string | null = null;
-    if (target !== null) url = (await chat.post({ repo: t.source.repo, issueOrPr: target }, `**${at(author)}** wrote in the factory app:\n\n${text}`)).url;
+    if (target !== null) url = (await chat.post({ repo: t.source.repo, issueOrPr: target }, `**${mention(author)}** wrote in the factory app:\n\n${text}`)).url;
     const at = new Date().toISOString();
     const mid = `app:${id}:${Date.now().toString(36)}`;
     await ledger.append(id, "message_received", { author, text, url }, { dedupeKey: `msg:${mid}` });
@@ -342,7 +342,7 @@ async function main() {
     const repo = { host: "github" as const, owner, name };
     const title = input.ask.split("\n")[0]!.trim().slice(0, 120) || "Task from the factory app";
     const where = input.origin ? (input.origin.url ? `[${input.origin.label}](${input.origin.url})` : input.origin.label) : "the factory app";
-    const body = `${input.ask}\n\n_Asked by ${at(input.requestedBy)} in ${where}._`;
+    const body = `${input.ask}\n\n_Asked by ${mention(input.requestedBy)} in ${where}._`;
     const labels = [cfg.FACTORY_LABEL, ...(input.labels ?? []).filter((l) => l !== cfg.FACTORY_LABEL)];
     const issue = await gh.request<{ number: number; html_url: string }>("POST", `/repos/${owner}/${name}/issues`, { title, body, labels });
     await onSignal({ type: "issue_labeled", id: `app-new:${repoName}#${issue.number}`, repo, at: new Date().toISOString(), actor: { login: input.requestedBy, isBot: false }, issueNumber: issue.number, label: cfg.FACTORY_LABEL, title, body, labels });

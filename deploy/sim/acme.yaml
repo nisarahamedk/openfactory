@@ -22,7 +22,7 @@ spec:
       serviceAccountName: openfactory
       containers:
         - name: server
-          image: openfactory:449f534
+          image: openfactory:41c32ff
           imagePullPolicy: IfNotPresent
           args: ["apps/server/dist/main.js"]
           ports: [{ containerPort: 3000, name: http }]
@@ -92,7 +92,7 @@ spec:
     spec:
       containers:
         - name: dashboard
-          image: openfactory:449f534
+          image: openfactory:41c32ff
           imagePullPolicy: IfNotPresent
           args: ["apps/dashboard/dist/main.js"]
           ports: [{ containerPort: 8080, name: http }]
