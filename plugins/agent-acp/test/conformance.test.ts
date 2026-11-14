@@ -35,7 +35,8 @@ describeAgentHarnessConformance(
       cleanup: async () => {
         await mock.close();
         origin.cleanup();
-        rmSync(root, { recursive: true, force: true });
+        // The agent process can still be writing its config files as it exits; retrying waits it out (ENOTEMPTY in CI).
+        rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       },
     };
   },
