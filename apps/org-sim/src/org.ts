@@ -83,4 +83,9 @@ export const WEEK1: Ask[] = [
   { key: "pay-plan-copy", via: "jira", by: "acme-omar", place: "PAY", text: "Account plan page: the button that opens billing should say 'Manage billing' everywhere (it says different things in two places).", labels: ["billing", "copy", "small"] },
   { key: "plat-format-test", via: "slack", by: "acme-ravi", place: "C0PLAT", text: "Add unit tests for src/lib/format.ts covering durations under a minute, exactly one minute, and over an hour.", labels: ["test", "small"] },
   { key: "plat-agents-one-test", via: "jira", by: "acme-sam", place: "PLAT", text: "Docs: add a short 'Run one test file' section to AGENTS.md with the exact command, and check it works.", labels: ["docs", "small"] },
+  // Week three: four small Web asks so the Web rollout (stable vs a candidate version) gets an A/B sample.
+  { key: "web-pricing-anchors", via: "slack", by: "acme-lena", place: "C0WEB", text: "Pricing page: give the 'Compare plans' and 'Questions' sections ids (compare, questions) so /pricing#compare and /pricing#questions jump straight to them. Small UI change, needs a screenshot.", labels: ["ui", "small"] },
+  { key: "web-pricing-currency", via: "jira", by: "acme-maya", place: "WEB", text: "Pricing page: under 'Private beta in Canada. Keep your number.' add a second line 'Prices in CAD, taxes extra.' in the same style.", labels: ["ui", "copy", "small"] },
+  { key: "web-privacy-contact", via: "slack", by: "acme-jon", place: "C0WEB", text: "Privacy page: end the page with 'Questions about privacy? Email us.' where 'Email us' is a mailto link to an address kept in one constant in the page file.", labels: ["ui", "small"] },
+  { key: "web-pricing-title", via: "slack", by: "acme-maya", place: "C0WEB", text: "Pricing page: the browser tab title should be 'Pricing · FirstWord' (check how other pages set theirs and do the same).", labels: ["ui", "small"] },
 ];
