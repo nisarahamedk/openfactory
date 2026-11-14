@@ -24,6 +24,8 @@ export type Intake =
       place: string | null;
       origin: { label: string; url: string | null };
       labels: string[];
+      /** Where to answer: Slack ts, Teams activity (with conversation and service URL), Jira key. */
+      reply: { thread: string | null; conversation: string | null; serviceUrl: string | null };
     }
   | { kind: "merge"; repo: string; prNumber: number; at: string }
   | { kind: "close"; repo: string; prNumber: number; at: string }
@@ -97,6 +99,7 @@ function slack(ev: CloudEvent): Intake {
     place: channel,
     origin: { label: `Slack ${channel ? `#${str(e.channel_name) ?? channel}` : ""}`.trim(), url: base && channel && ts ? `${base}/archives/${channel}/p${ts.replace(".", "")}` : null },
     labels: [],
+    reply: { thread: ts, conversation: null, serviceUrl: null },
   };
 }
 
@@ -116,6 +119,7 @@ function msteams(ev: CloudEvent): Intake {
     place: str(channel.id),
     origin: { label: `Microsoft Teams ${str(channel.name) ? `#${str(channel.name)}` : ""}`.trim(), url: null },
     labels: [],
+    reply: { thread: str(a.id), conversation: str(obj(a.conversation).id), serviceUrl: str(a.serviceUrl) },
   };
 }
 
@@ -150,6 +154,7 @@ function jira(ev: CloudEvent, ctx: TranslateContext): Intake {
     place: project,
     origin: { label: `Jira ${key}`, url: site ? `${site}/browse/${key}` : null },
     labels: labels.filter((l) => l !== ctx.factoryLabel),
+    reply: { thread: key, conversation: null, serviceUrl: site },
   };
 }
 
@@ -243,6 +248,7 @@ function cdevents(ev: CloudEvent, ctx: TranslateContext): Intake {
         place: str(content.group),
         origin: { label: `Ticket ${str(subject.id) ?? ""}`.trim(), url: str(content.uri) },
         labels: labels.filter((l) => l !== ctx.factoryLabel),
+        reply: { thread: str(subject.id), conversation: null, serviceUrl: null },
       };
     }
     case "dev.cdevents.change.merged": {

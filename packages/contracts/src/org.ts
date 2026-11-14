@@ -113,10 +113,52 @@ export const ConnectedSource = z.object({
   ceSource: z.string().min(1).max(300),
   uses: z.array(z.enum(["asks", "outcomes", "deploys"])).min(1),
   routes: z.record(z.string(), z.string()).default({}),
+  /**
+   * How the factory answers people in the thread an ask came from. "post": with the tool's own API, using the
+   * credentials named by `tokenEnv` (Slack bot token; Teams "APP_ID:PASSWORD"; Jira "email:api-token").
+   * "cloudevents": POST a dev.openfactory.task.updated CloudEvent to `url` for the org to route on.
+   * "record": keep the reply in the app only (no credentials yet, or a simulated org).
+   */
+  reply: z
+    .object({ mode: z.enum(["post", "cloudevents", "record"]), tokenEnv: z.string().nullable().default(null), url: z.string().nullable().default(null), apiBase: z.string().nullable().default(null) })
+    .default({ mode: "record", tokenEnv: null, url: null, apiBase: null }),
   connectedBy: z.string().nullable(),
   connectedAt: z.string(),
 });
 export type ConnectedSource = z.infer<typeof ConnectedSource>;
+
+/** Where to answer an ask: the chat thread or ticket it came from, and the task it became. */
+export const ReplyThread = z.object({
+  key: z.string(),
+  sourceId: z.string(),
+  kind: SourceKind,
+  place: z.string().nullable(),
+  /** Slack message ts, Teams activity id, Jira issue key. */
+  thread: z.string().nullable(),
+  /** Teams only: conversation id and the Bot Framework service URL to reply through. */
+  conversation: z.string().nullable().default(null),
+  serviceUrl: z.string().nullable().default(null),
+  repo: z.string(),
+  issueNumber: z.number().int(),
+  /** The last task status the thread was told about. */
+  told: z.string().nullable().default(null),
+  createdAt: z.string(),
+});
+export type ReplyThread = z.infer<typeof ReplyThread>;
+
+export const SentReply = z.object({
+  key: z.string(),
+  sourceId: z.string(),
+  threadKey: z.string(),
+  taskId: z.string(),
+  status: z.string(),
+  text: z.string(),
+  at: z.string(),
+  /** sent: delivered by the tool's API or the CloudEvents endpoint; recorded: kept in the app only; failed: see detail. */
+  delivery: z.enum(["sent", "recorded", "failed"]),
+  detail: z.string().nullable(),
+});
+export type SentReply = z.infer<typeof SentReply>;
 
 export const ConnectedRepo = z.object({
   repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
@@ -152,6 +194,8 @@ export const OrgState = z.object({
   factories: z.array(OrgFactory),
   sources: z.array(ConnectedSource),
   setup: z.array(SetupStep),
+  /** The latest replies to the threads and tickets asks came from, newest first. */
+  replies: z.array(SentReply).default([]),
 });
 export type OrgState = z.infer<typeof OrgState>;
 

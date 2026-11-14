@@ -58,7 +58,7 @@ const repoRef = (s: string): RepoRef => {
 };
 
 /** Setup progress, computed from what exists (never stored). */
-export function setupSteps(s: Omit<OrgState, "setup">, taskCount: number): SetupStep[] {
+export function setupSteps(s: Omit<OrgState, "setup" | "replies">, taskCount: number): SetupStep[] {
   const joined = s.people.filter((p) => p.status === "joined").length;
   const askSources = s.sources.filter((x) => x.uses.includes("asks"));
   const outcomeSources = s.sources.filter((x) => x.uses.includes("outcomes") || x.uses.includes("deploys"));
@@ -110,7 +110,7 @@ export async function orgState(d: Pick<OrgDeps, "store" | "ledger">): Promise<Or
     d.ledger.listTasks({ limit: 1 }),
   ]);
   const s = { org, repos, people, teams, factories, sources };
-  return { ...s, setup: setupSteps(s, tasks.length) };
+  return { ...s, setup: setupSteps(s, tasks.length), replies: await d.store.replies(50) };
 }
 
 /** Find the task an outcome event points at. */
@@ -165,6 +165,21 @@ async function act(d: OrgDeps, ev: CloudEvent, it: Intake, source: ConnectedSour
       const team = it.place && source ? (source.routes[it.place] ?? null) : null;
       const teamRepo = team ? ((await d.store.team(team))?.repos[0] ?? null) : null;
       const out = await d.ask({ ask: it.ask, repo: teamRepo, requestedBy: person.login, origin: it.origin, labels: it.labels, team });
+      // Remember where to answer, so the asker hears back in their own thread or ticket.
+      if (source && (it.reply.thread || it.place))
+        await d.store.putThread({
+          key: `${source.id}:${ev.id}`,
+          sourceId: source.id,
+          kind: source.kind,
+          place: it.place,
+          thread: it.reply.thread,
+          conversation: it.reply.conversation,
+          serviceUrl: it.reply.serviceUrl,
+          repo: out.repo,
+          issueNumber: out.issueNumber,
+          told: null,
+          createdAt: d.now(),
+        });
       return r("ask", `Asked by ${person.login}${team ? ` for team ${team}` : ""}: ${out.repo}#${out.issueNumber}`, null, out.issueUrl);
     }
     case "merge":

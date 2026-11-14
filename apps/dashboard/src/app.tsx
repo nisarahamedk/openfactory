@@ -490,7 +490,8 @@ export function createDashboard(
   setupPost("/setup/source", "sources", async (f, by) => {
     const uses = (Array.isArray(f.uses) ? f.uses : f.uses ? [f.uses] : []).filter((x): x is string => typeof x === "string") as Array<"asks" | "outcomes" | "deploys">;
     const routes = Object.fromEntries(list(f.routes).map((r) => r.split("=").map((x) => x.trim())).filter((r) => r.length === 2 && r[0] && r[1]));
-    await api.connectSource({ id: text(f.id) ?? "", kind: (text(f.kind) ?? "cdevents") as never, name: text(f.name) ?? "", ceSource: text(f.ceSource) ?? "", uses, routes, by });
+    const reply = { mode: (text(f.replyMode) ?? "record") as "record" | "post" | "cloudevents", tokenEnv: text(f.replyTokenEnv), url: text(f.replyUrl), apiBase: null };
+    await api.connectSource({ id: text(f.id) ?? "", kind: (text(f.kind) ?? "cdevents") as never, name: text(f.name) ?? "", ceSource: text(f.ceSource) ?? "", uses, routes, reply, by });
     return `Connected ${text(f.name)}.`;
   });
   setupPost("/setup/factory", "factories", async (f, by) => {

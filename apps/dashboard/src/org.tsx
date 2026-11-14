@@ -104,6 +104,9 @@ export function SetupPage({ s, viewer, eventsUrl, teams }: { s: OrgState; viewer
             <label><input type="checkbox" name="uses" value="outcomes" /> incidents and reverts</label>
           </div></div>
           {field("Route to teams", <input class="in" name="routes" placeholder="C024WEB=web, PAY=payments" />, "Channel, project or service = team")}
+          {field("Reply to askers", <select class="in" name="replyMode"><option value="record">Keep replies in the app</option><option value="post">Post in the thread or ticket</option><option value="cloudevents">Send CloudEvents to a URL</option></select>, "Where the factory answers the person who asked")}
+          {field("Credentials variable", <input class="in" name="replyTokenEnv" placeholder="SLACK_BOT_TOKEN" />, "Name of the server env var, never the value")}
+          {field("Reply URL", <input class="in" name="replyUrl" placeholder="https://events.acme.dev/factory" />, "For CloudEvents")}
           <button class="btn primary" type="submit">Connect</button>
         </form>
       </Section>
@@ -174,9 +177,9 @@ function SourcesTable({ sources }: { sources: ConnectedSource[] }) {
   if (!sources.length) return <p class="muted" style="margin:0">Nothing connected yet.</p>;
   return (
     <div class="card flush"><div class="scroll"><table class="tbl">
-      <thead><tr><th>Tool</th><th>Event source</th><th>Used for</th><th>Routes</th><th>Connected</th></tr></thead>
+      <thead><tr><th>Tool</th><th>Event source</th><th>Used for</th><th>Routes</th><th>Replies</th><th>Connected</th></tr></thead>
       <tbody>{sources.map((x) => (
-        <tr><td><a class="title" href={`/sources?source=${x.id}`}>{x.name}</a><div class="muted">{SOURCE_LABEL[x.kind]}</div></td><td class="mono">{x.ceSource}</td><td>{x.uses.join(", ")}</td><td class="mono" style="white-space:normal">{Object.entries(x.routes).map(([k, v]) => `${k} → ${v}`).join(", ") || "—"}</td><td class="muted">{x.connectedBy ? `by ${x.connectedBy}, ` : ""}{x.connectedAt.slice(0, 10)}</td></tr>
+        <tr><td><a class="title" href={`/sources?source=${x.id}`}>{x.name}</a><div class="muted">{SOURCE_LABEL[x.kind]}</div></td><td class="mono">{x.ceSource}</td><td>{x.uses.join(", ")}</td><td class="mono" style="white-space:normal">{Object.entries(x.routes).map(([k, v]) => `${k} → ${v}`).join(", ") || "—"}</td><td>{!x.uses.includes("asks") ? <span class="muted">—</span> : x.reply?.mode === "post" ? `in the ${x.kind === "jira" ? "ticket" : "thread"}` : x.reply?.mode === "cloudevents" ? "CloudEvents" : <span class="muted">kept in the app</span>}</td><td class="muted">{x.connectedBy ? `by ${x.connectedBy}, ` : ""}{x.connectedAt.slice(0, 10)}</td></tr>
       ))}</tbody>
     </table></div></div>
   );
@@ -225,6 +228,33 @@ export function PeoplePage({ s, teams }: { s: OrgState; teams: Team[] }) {
 const RESULT_TONE: Record<InboundEvent["result"]["kind"], Tone> = { ask: "good", signal: "good", outcome: "warn", ignored: "neutral", error: "bad" };
 const RESULT_WORD: Record<InboundEvent["result"]["kind"], string> = { ask: "Started work", signal: "Moved a PR", outcome: "Outcome", ignored: "Ignored", error: "Failed" };
 
+const DELIVERY_TONE = { sent: "good", recorded: "info", failed: "bad" } as const;
+const STATUS_WORD: Record<string, string> = { working: "Picked up", awaiting_review: "Ready for review", merged: "Merged", closed: "Closed", failed: "Couldn't finish" };
+
+/** What askers were told in their own thread, and whether it reached them. */
+function Replies({ s }: { s: OrgState }) {
+  const rs = s.replies ?? [];
+  if (!rs.length) return null;
+  const name = (id: string) => s.sources.find((x) => x.id === id)?.name ?? id;
+  return (
+    <>
+      <div class="section-title">Replies to askers <span class="n">{rs.length}</span></div>
+      <div class="card flush" style="margin-bottom:12px"><div class="scroll"><table class="tbl">
+        <thead><tr><th>When</th><th>Where</th><th>News</th><th>What they were told</th><th>Delivery</th></tr></thead>
+        <tbody>{rs.map((r) => (
+          <tr>
+            <td class="muted num">{r.at.slice(5, 16).replace("T", " ")}</td>
+            <td>{name(r.sourceId)}</td>
+            <td><a class="link" href={`/tasks/${r.taskId}`}>{STATUS_WORD[r.status] ?? r.status}</a></td>
+            <td class="wrapcell t2" style="font-size:13px;min-width:260px">{r.text}</td>
+            <td class="wrapcell"><Badge tone={DELIVERY_TONE[r.delivery]}>{r.delivery}</Badge>{r.detail ? <div class="muted" style="font-size:12px;margin-top:2px">{r.detail}</div> : null}</td>
+          </tr>
+        ))}</tbody>
+      </table></div></div>
+    </>
+  );
+}
+
 export function SourcesPage({ s, events, only, eventsUrl }: { s: OrgState; events: InboundEvent[]; only: string | null; eventsUrl: string }) {
   const counts = new Map<string, number>();
   for (const e of events) counts.set(e.result.kind, (counts.get(e.result.kind) ?? 0) + 1);
@@ -234,6 +264,7 @@ export function SourcesPage({ s, events, only, eventsUrl }: { s: OrgState; event
         <a class="btn" href="/setup#sources"><Icon name="plus" />Connect a tool</a>
       </PageHeader>
       <SourcesTable sources={s.sources} />
+      <Replies s={s} />
       <div class="section-title">{only ? <>Events from {s.sources.find((x) => x.id === only)?.name ?? only} <a class="link muted" href="/sources" style="font-size:13px;font-weight:400">show all</a></> : "Recent events"}<span class="n">{events.length}{counts.size ? ` · ${[...counts].map(([k, n]) => `${n} ${RESULT_WORD[k as keyof typeof RESULT_WORD].toLowerCase()}`).join(", ")}` : ""}</span></div>
       <div class="card flush"><div class="scroll"><table class="tbl">
         <thead><tr><th>Received</th><th>Tool</th><th>Event</th><th>What happened</th><th>Task</th></tr></thead>

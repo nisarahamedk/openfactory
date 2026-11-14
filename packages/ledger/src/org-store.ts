@@ -6,7 +6,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { PgDatabase } from "drizzle-orm/pg-core";
 import { jsonb, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
-import { ConnectedRepo, ConnectedSource, InboundEvent, IntakeResult, OrgFactory, OrgInfo, OrgTeam, Person, type CloudEvent, type SourceKind } from "@openfactory/contracts";
+import { ConnectedRepo, ConnectedSource, InboundEvent, IntakeResult, OrgFactory, OrgInfo, OrgTeam, Person, ReplyThread, SentReply, type CloudEvent, type SourceKind } from "@openfactory/contracts";
 import type { z } from "zod";
 
 export const orgObjects = pgTable(
@@ -59,6 +59,8 @@ const KINDS = {
   team: OrgTeam,
   factory: OrgFactory,
   source: ConnectedSource,
+  thread: ReplyThread,
+  reply: SentReply,
 } as const;
 type Kind = keyof typeof KINDS;
 type ValueOf<K extends Kind> = z.infer<(typeof KINDS)[K]>;
@@ -120,6 +122,11 @@ export class OrgStore {
   sources = () => this.list("source");
   putSource = (v: ConnectedSource) => this.put("source", v.id, v);
   removeSource = (id: string) => this.remove("source", id);
+  threads = () => this.list("thread");
+  putThread = (v: ReplyThread) => this.put("thread", v.key, v);
+  putReply = (v: SentReply) => this.put("reply", v.key, v);
+  /** Replies sent to chat threads and tickets, newest first. */
+  replies = async (limit = 100) => (await this.list("reply")).sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
 
   /** Keep an inbound event. Returns false when this source + id was already received (CloudEvents dedupe rule). */
   async recordEvent(input: { event: CloudEvent; sourceId: string | null; kind: SourceKind | null; result: z.infer<typeof IntakeResult> }): Promise<boolean> {

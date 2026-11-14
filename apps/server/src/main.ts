@@ -19,6 +19,7 @@ import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
 import { Health } from "./health.js";
 import { cachedDirectory, configDirectory, factoryViews, loadOrgConfig, type FactoryDef } from "./org.js";
+import { tellThreads } from "./replies.js";
 import { createOrgRoutes, mergeTeams } from "./org-api.js";
 import { loadFactoryExtras, loadModelRouting, loadOutcomeConfig, loadSelections, ProviderRegistry } from "./registry.js";
 
@@ -380,6 +381,19 @@ async function main() {
     now: () => new Date().toISOString(),
     log,
   });
+
+  // Answer askers in their own Slack/Teams thread or Jira ticket as their task moves (every 20s).
+  const replyTimer = setInterval(() => {
+    tellThreads({
+      store: orgStore,
+      ledger,
+      appUrl: process.env.DASHBOARD_PUBLIC_URL ?? null,
+      ceSource: process.env.FACTORY_PUBLIC_URL ?? "openfactory",
+      now: () => new Date().toISOString(),
+      log,
+    }).catch((e) => log("replies failed", { error: String(e) }));
+  }, 20_000);
+  replyTimer.unref();
 
   const app = createApp({
     org: orgRoutes,
