@@ -201,7 +201,7 @@ export class FactoryApi implements LedgerReader {
     return this.call("POST", "/v1/org/factories", oneOf(OrgFactory, "factory"), input);
   }
 
-  connectSource(input: Omit<ConnectedSource, "connectedBy" | "connectedAt" | "routes"> & { routes?: Record<string, string>; by: string }): Promise<ConnectedSource> {
+  connectSource(input: Omit<ConnectedSource, "connectedBy" | "connectedAt" | "routes" | "reply"> & { routes?: Record<string, string>; reply?: Partial<ConnectedSource["reply"]> & { mode: ConnectedSource["reply"]["mode"] }; by: string }): Promise<ConnectedSource> {
     return this.call("POST", "/v1/org/sources", oneOf(ConnectedSource, "source"), input);
   }
 
