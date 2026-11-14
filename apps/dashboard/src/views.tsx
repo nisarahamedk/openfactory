@@ -1019,11 +1019,11 @@ function RunCard({ run }: { run: BenchRun }) {
       </div>
       {rep !== null ? (
         <>
-          <div class={`alert ${rep.verdict === "too_close" ? "warn" : ""}`} style={`margin:14px 0;${rep.verdict === "too_close" ? "" : "background:var(--good-soft);border-color:transparent"}`}><b>{rep.summary}</b></div>
+          <div class={`alert ${rep.verdict === "too_close" || rep.verdict === "trade_off" ? "warn" : ""}`} style={`margin:14px 0;${rep.verdict === "too_close" || rep.verdict === "trade_off" ? "" : "background:var(--good-soft);border-color:transparent"}`}><b>{rep.summary}</b></div>
           <div class="grid g2">
             <table class="tbl">
-              <thead><tr><th style="padding-left:0">Arm</th><th class="r">Pass</th><th class="r">Mean cost</th><th class="r" style="padding-right:0">Mean time</th></tr></thead>
-              <tbody>{[rep.a, rep.b].map((s) => <tr><td style="padding-left:0">{s.arm}</td><td class="r num">{s.passes}/{s.attempts}, {pct(s.passRate)}</td><td class="r num">{usd(s.meanCostUsd)}</td><td class="r num" style="padding-right:0">{dur(s.meanDurationS)}</td></tr>)}</tbody>
+              <thead><tr><th style="padding-left:0">Arm</th><th class="r">Pass</th><th class="r">Mean cost</th><th class="r">Cost per pass</th><th class="r" style="padding-right:0">Mean time</th></tr></thead>
+              <tbody>{[rep.a, rep.b].map((s) => <tr><td style="padding-left:0">{s.arm}</td><td class="r num">{s.passes}/{s.attempts}, {pct(s.passRate)}</td><td class="r num">{usd(s.meanCostUsd)}</td><td class="r num"><b>{s.costPerPassUsd === null || s.costPerPassUsd === undefined ? "—" : usd(s.costPerPassUsd)}</b></td><td class="r num" style="padding-right:0">{dur(s.meanDurationS)}</td></tr>)}</tbody>
             </table>
             <TaskGrid run={run} />
           </div>

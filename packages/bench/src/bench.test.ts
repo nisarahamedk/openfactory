@@ -345,3 +345,20 @@ describe("world check", () => {
     expect(r.checks).toEqual({ repo: false, world: false });
   });
 });
+
+describe("cost and pass together", () => {
+  const mk = (arm: string, passed: boolean, cost: number, i: number): ArmResult => ({
+    arm, benchmarkTaskId: `b${i % 3}`, factoryVersion: arm, attempt: i, passed, usage: { inputTokens: 0, outputTokens: 0, costUsd: cost }, durationMs: 1, notes: "",
+  });
+  it("same pass rate, B clearly dearer: A is better", () => {
+    const rs = [...Array(9).keys()].flatMap((i) => [mk("A", true, 0.25 + (i % 3) * 0.01, i), mk("B", true, 0.37 + (i % 3) * 0.01, i)]);
+    const r = compareArms(rs, "A", "B");
+    expect(r.verdict).toBe("a_better");
+    expect(r.costRatio!.low).toBeGreaterThan(1.1);
+    expect(r.summary).toMatch(/costs less/);
+  });
+  it("B passes more but each pass costs more: a trade-off", () => {
+    const rs = [...Array(12).keys()].flatMap((i) => [mk("A", i % 2 === 0, 0.1, i), mk("B", true, 0.5, i)]);
+    expect(compareArms(rs, "A", "B").verdict).toBe("trade_off");
+  });
+});
