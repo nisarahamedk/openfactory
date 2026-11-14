@@ -109,7 +109,7 @@ export function SetupPage({ s, viewer, eventsUrl, teams }: { s: OrgState; viewer
       </Section>
 
       <Section id="factories" n={4} title="Make team factories" done={s.factories.length > 0} sub="A team factory changes only what it needs on top of the org default: extra scorers, its own benchmarks, an OpenWorld world, and which paths make a PR high or low risk. Org scorers always apply.">
-        <div class="card flush" style="margin-bottom:12px"><table class="tbl">
+        <div class="card flush" style="margin-bottom:12px"><div class="scroll"><table class="tbl">
           <thead><tr><th>Factory</th><th>Adds scorers</th><th>Benchmarks</th><th>World</th><th>High-risk paths</th></tr></thead>
           <tbody>
             <tr><td><a class="title" href="/factories/default">default</a><div class="muted">The org default</div></td><td class="muted">org scorers</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td></tr>
@@ -117,7 +117,7 @@ export function SetupPage({ s, viewer, eventsUrl, teams }: { s: OrgState; viewer
               <tr><td><a class="title" href={`/factories/${f.slug}`}>{f.slug}</a><div class="muted" style="white-space:normal;max-width:36ch">{f.description}</div></td><td>{f.scorers.join(", ") || "—"}</td><td>{f.benchmarks.join(", ") || "—"}</td><td>{f.world ?? "—"}</td><td class="mono">{f.mergeRisk?.high.join(", ") || "—"}</td></tr>
             ))}
           </tbody>
-        </table></div>
+        </table></div></div>
         <form method="post" action="/setup/factory" class="form">
           {field("Slug", <input class="in" name="slug" required pattern="[a-z0-9][a-z0-9-]*" placeholder="payments" />)}
           {field("What it changes", <input class="in" name="description" placeholder="Money rules reviewer, ledger checks" />)}
@@ -132,12 +132,12 @@ export function SetupPage({ s, viewer, eventsUrl, teams }: { s: OrgState; viewer
 
       <Section id="teams" n={5} title="Create teams" done={step("teams").done && step("factories").done} sub="Teams come from your directory (GitHub teams, SSO groups) or are made here. A team's scope is the part of a shared repo it owns; its factory is where its tasks run.">
         {s.teams.length ? (
-          <div class="card flush" style="margin-bottom:12px"><table class="tbl">
+          <div class="card flush" style="margin-bottom:12px"><div class="scroll"><table class="tbl">
             <thead><tr><th>Team</th><th>Repos</th><th>Scope</th><th>Factory</th><th class="r">People</th></tr></thead>
             <tbody>{s.teams.map((t) => (
               <tr><td><a class="title" href={`/teams/${t.slug}`}>{t.name}</a><div class="muted" style="white-space:normal;max-width:36ch">{t.description}</div></td><td class="mono">{t.repos.join(", ")}</td><td class="mono" style="white-space:normal">{[...t.scope.paths, ...t.scope.labels.map((l) => `label:${l}`)].join(", ") || "whole repo"}</td><td><a class="link" href={`/factories/${t.factory}`}>{t.factory}</a></td><td class="r num">{t.members.length}</td></tr>
             ))}</tbody>
-          </table></div>
+          </table></div></div>
         ) : teams.length ? <p class="note">Your directory already has {teams.length} team{teams.length === 1 ? "" : "s"}: {teams.map((t) => t.name).join(", ")}.</p> : null}
         <form method="post" action="/setup/team" class="form">
           {field("Slug", <input class="in" name="slug" required pattern="[a-z0-9][a-z0-9-]*" placeholder="web" />)}
@@ -173,12 +173,12 @@ export function SetupPage({ s, viewer, eventsUrl, teams }: { s: OrgState; viewer
 function SourcesTable({ sources }: { sources: ConnectedSource[] }) {
   if (!sources.length) return <p class="muted" style="margin:0">Nothing connected yet.</p>;
   return (
-    <div class="card flush"><table class="tbl">
+    <div class="card flush"><div class="scroll"><table class="tbl">
       <thead><tr><th>Tool</th><th>Event source</th><th>Used for</th><th>Routes</th><th>Connected</th></tr></thead>
       <tbody>{sources.map((x) => (
         <tr><td><a class="title" href={`/sources?source=${x.id}`}>{x.name}</a><div class="muted">{SOURCE_LABEL[x.kind]}</div></td><td class="mono">{x.ceSource}</td><td>{x.uses.join(", ")}</td><td class="mono" style="white-space:normal">{Object.entries(x.routes).map(([k, v]) => `${k} → ${v}`).join(", ") || "—"}</td><td class="muted">{x.connectedBy ? `by ${x.connectedBy}, ` : ""}{x.connectedAt.slice(0, 10)}</td></tr>
       ))}</tbody>
-    </table></div>
+    </table></div></div>
   );
 }
 

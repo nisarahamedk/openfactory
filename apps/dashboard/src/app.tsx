@@ -96,7 +96,10 @@ function roleFor(path: string): Role {
   if (/^\/factories\/[^/]+\/rollout$/.test(path) || path === "/bench/runs" || path.startsWith("/setup/")) return "admin";
   return "engineer";
 }
-const msg = (path: string, m: string) => `${path}${path.includes("?") ? "&" : "?"}msg=${encodeURIComponent(m)}`;
+const msg = (path: string, m: string) => {
+  const [base, hash] = path.split("#") as [string, string | undefined];
+  return `${base}${base.includes("?") ? "&" : "?"}msg=${encodeURIComponent(m)}${hash ? `#${hash}` : ""}`;
+};
 /** Only same-app paths are followed after a form post. */
 const safePath = (p: unknown, fallback = "/") => (typeof p === "string" && p.startsWith("/") && !p.startsWith("//") ? p : fallback);
 
