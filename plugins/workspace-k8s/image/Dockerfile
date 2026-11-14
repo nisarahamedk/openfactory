@@ -74,7 +74,12 @@ ENV IS_SANDBOX=1 \
 # this is a no-op; with a different pin it downloads that version's browsers
 # (system libraries come from the base image, so no apt step).
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install chromium \
+ && npm install -g "playwright@${PLAYWRIGHT_VERSION}" \
  && npm cache clean --force
+
+# factory-evidence: wait for the env, take desktop + phone screenshots, keep test output, and write the
+# evidence manifest for HEAD the way the factory checks it.
+COPY --chmod=755 factory-evidence.mjs /usr/local/bin/factory-evidence
 
 WORKDIR /work
 CMD ["sleep", "infinity"]

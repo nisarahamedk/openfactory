@@ -27,6 +27,19 @@ versions:
           - Unit tests: tests/*.test.ts (run one: `pnpm exec tsx scripts/run-tests.ts tests/<file>.test.ts` or `pnpm test`).
           - E2E: tests/e2e/*.spec.ts with Playwright, against STAGE_URL.
           - Before you push: `pnpm typecheck`, the touched tests, then deploy and screenshot.
+  acme-v6-evidence:
+    label: evidence tool skill (faster screenshots and test output)
+    models: { default: claude-haiku, routes: [] }
+    skills:
+      - name: factory-evidence
+        description: The fast way to wait for your environment, take screenshots and keep test output as evidence for HEAD. Use it instead of writing Playwright screenshot scripts or the evidence manifest by hand.
+        body: |
+          `factory-evidence` writes files and manifest entries for the current HEAD; run it from the checkout after you commit.
+          - `factory-evidence wait` blocks until $FACTORY_ENV_URL answers (up to 10 minutes). Run it after deploying.
+          - `factory-evidence shot /privacy --title "Privacy page"` saves desktop and phone screenshots of that path. Add `--dark` for dark mode.
+          - `factory-evidence test "e2e privacy" -- pnpm exec playwright test tests/e2e/privacy.spec.ts` runs a test and keeps its output.
+          - `factory-evidence list` shows what HEAD has. A new commit needs new evidence: run shot and test again.
+          Don't hand-edit manifest.json, and don't write screenshot scripts.
   acme-v3-codegraph:
     label: CodeGraph index (fewer tokens reading)
     models: { default: claude-haiku, routes: [] }
