@@ -22,7 +22,7 @@ spec:
       serviceAccountName: openfactory
       containers:
         - name: server
-          image: openfactory:41c32ff
+          image: openfactory:6d7067b
           imagePullPolicy: IfNotPresent
           args: ["apps/server/dist/main.js"]
           ports: [{ containerPort: 3000, name: http }]
@@ -37,6 +37,8 @@ spec:
             - { name: FACTORY_LABEL, value: acme }
             - { name: FACTORY_REPOS, value: nisarahamedk/firstword }
             - { name: MAX_TASK_USD, value: "2" }
+            # Workspaces use ~0.5Gi; a 2Gi request left no room for a task's preview env on the 8GB VM.
+            - { name: WORKSPACE_MEMORY, value: "1Gi" }
             - { name: MENTIONS, value: "off" }
             - { name: MODEL_PROXY_URL, value: "http://litellm.factory.svc:4000" }
             - { name: FOREMAN_MODEL, value: claude-haiku }
@@ -92,7 +94,7 @@ spec:
     spec:
       containers:
         - name: dashboard
-          image: openfactory:41c32ff
+          image: openfactory:6d7067b
           imagePullPolicy: IfNotPresent
           args: ["apps/dashboard/dist/main.js"]
           ports: [{ containerPort: 8080, name: http }]

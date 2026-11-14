@@ -63,12 +63,24 @@ export class GitHubClient {
 
 const r = (repo: RepoRef) => `/repos/${repo.owner}/${repo.name}`;
 
+/**
+ * Turn every GitHub @-mention into inline code, so nobody is notified. Simulated orgs use made-up logins
+ * that a real person may own; the agent and foreman write mentions themselves, so this runs on the way out.
+ */
+export function quietMentions(markdown: string): string {
+  return markdown.replace(/(^|[^\w`@/.-])@([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})(?![\w@/-]|\.\w)/g, "$1`$2`");
+}
+
 export class GitHubChat implements Chat {
   readonly name = "github";
-  constructor(private readonly gh: GitHubClient) {}
+  constructor(
+    private readonly gh: GitHubClient,
+    private readonly opts: { mentions?: boolean } = {},
+  ) {}
   async post(target: { repo: RepoRef; issueOrPr: number }, markdown: string): Promise<{ url: string }> {
+    const text = this.opts.mentions === false ? quietMentions(markdown) : markdown;
     const c = await this.gh.request<{ html_url: string }>("POST", `${r(target.repo)}/issues/${target.issueOrPr}/comments`, {
-      body: `${markdown}\n\n${FACTORY_MARKER}`,
+      body: `${text}\n\n${FACTORY_MARKER}`,
     });
     return { url: c.html_url };
   }
@@ -384,7 +396,8 @@ export const provider = defineProvider({
       const { gh, token, app } = clientFrom(ctx);
       return new GitHubCodeForge(gh, { token, ...(app ? { mint: (repo: RepoRef) => app.taskToken([repo]) } : {}) });
     },
-    chat: (ctx) => new GitHubChat(clientFrom(ctx).gh),
+    // MENTIONS=off (or options.mentions: false) keeps every comment from notifying anyone: for simulated orgs.
+    chat: (ctx) => new GitHubChat(clientFrom(ctx).gh, { mentions: ctx.options.mentions === false || ctx.env.MENTIONS === "off" ? false : true }),
     signals: (ctx) =>
       new GitHubPollingSource(clientFrom(ctx).gh, {
         repos: reposFrom(ctx),

@@ -23,7 +23,7 @@ const base = process.env.FACTORY_URL ?? "https://acme-factory.178.105.22.96.ssli
 const token = process.env.FACTORY_API_TOKEN ?? null;
 const api = new FactoryApi({ baseUrl: base, token });
 const STATE = process.env.ORG_SIM_STATE ?? "org-sim-state.json";
-type State = { asks: Record<string, { issueUrl: string | null; at: string }>; reviewed: Record<string, string>; merged: Record<string, string>; planted: Record<string, string> };
+type State = { asks: Record<string, { issueUrl: string | null; at: string; changedAt?: string }>; reviewed: Record<string, string>; merged: Record<string, string>; planted: Record<string, string> };
 const load = (): State => {
   try {
     return { asks: {}, reviewed: {}, merged: {}, planted: {}, ...JSON.parse(readFileSync(STATE, "utf8")) };
@@ -111,15 +111,25 @@ const reviewerFor = (login: string) => {
 async function review() {
   const st = load();
   for (const { key, task } of await orgTasks()) {
-    if (task.status !== "awaiting_review" || st.reviewed[key]) continue;
+    if (task.status !== "awaiting_review") continue;
+    // After a change request, the next time the task is back in review (and has moved since), it's approved.
+    if (st.reviewed[key] === "changes" && Date.parse(task.updatedAt) > Date.parse(st.asks[key]?.changedAt ?? task.updatedAt) + 60_000) {
+      st.reviewed[key] = "approved";
+      save(st);
+      log(`${key}: approved after the change`);
+      continue;
+    }
+    if (st.reviewed[key]) continue;
     const who = reviewerFor(task.requestedBy ?? "");
     // One change request per org-week, on a payments task (billing paths always get a human look).
     const change = key === "pay-plan-renewal" && !Object.values(st.reviewed).includes("changes");
     const text = change
       ? "Close. Please use the owner's locale for the date (Intl.DateTimeFormat with the browser locale) rather than a fixed en-GB format, and add the cancelled case to the e2e check."
       : "Looks right, and the screenshots match the ask. Approving; ship it.";
-    await api.postMessage(task.id, { author: who, text });
+    // The factory has no "approve" message: any comment is a request to iterate, and approval is the merge.
+    if (change) await api.postMessage(task.id, { author: who, text });
     st.reviewed[key] = change ? "changes" : "approved";
+    if (change && st.asks[key]) st.asks[key]!.changedAt = new Date().toISOString();
     save(st);
     log(`${key}: ${who} ${change ? "asked for a change" : "approved"}`);
   }
@@ -144,7 +154,7 @@ async function outcomes() {
   const merged = (await orgTasks()).filter(({ key }) => st.merged[key]);
   const pick = (k: string) => merged.find((m) => m.key === k) ?? null;
   const plans: Array<[string, (t: TaskRecord) => CloudEvent]> = [
-    ["web-footer-year", (t) => fake.datadogAlert({ source: DATADOG, title: "Marketing pages: client error rate above 2%", body: `Errors started after deploy of ${t.pr!.headSha}`, sha: t.pr!.headSha!, service: "firstword-web" })],
+    ["web-privacy-date", (t) => fake.datadogAlert({ source: DATADOG, title: "Marketing pages: client error rate above 2%", body: `Errors started after deploy of ${t.pr!.headSha}`, sha: t.pr!.headSha!, service: "firstword-web" })],
     ["pay-plan-copy", (t) => fake.rootlyIncident({ source: ROOTLY, title: "Billing portal link broken on plan page", summary: `Owners can't reach billing. Suspected change: https://github.com/${REPO}/pull/${t.pr!.number}`, severity: "SEV2" })],
     ["pay-plan-copy", (t) => fake.changeReverted({ source: CD, repo: REPO, prNumber: t.pr!.number, description: "Reverted after SEV2: billing link pointed at the old route" })],
     ["plat-format-test", (t) => fake.changeFixed({ source: CD, repo: REPO, prNumber: t.pr!.number, description: "Follow-up: test was timezone-dependent and failed on CI runners in UTC+13" })],
