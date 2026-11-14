@@ -187,6 +187,13 @@ export function unitHash(s: string): number {
     h ^= s.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
+  // FNV-1a alone barely moves the top bits when only the last characters differ, so sequential ids
+  // (gh-event:9001, gh-event:9002, ...) landed on the same arm. Murmur3's finalizer mixes every bit.
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
   return (h >>> 0) / 2 ** 32;
 }
 

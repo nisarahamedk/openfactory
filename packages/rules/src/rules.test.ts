@@ -107,6 +107,10 @@ describe("pickVersion, mergeRisk, planScope", async () => {
     expect(share).toBeGreaterThan(0.07);
     expect(share).toBeLessThan(0.13);
     expect(pickVersion("x", r)).toEqual(pickVersion("x", r));
+    // Sequential signal ids (GitHub event ids arrive close together) must still split between the arms.
+    const seq = Array.from({ length: 12 }, (_, i) => pickVersion(`gh-event:5512340${10 + i}`, { ...r, share: 0.5 }).arm);
+    expect(seq.filter((a) => a === "candidate").length).toBeGreaterThanOrEqual(3);
+    expect(seq.filter((a) => a === "stable").length).toBeGreaterThanOrEqual(3);
     expect(pickVersion("x", { ...r, candidate: null }).arm).toBe("stable");
   });
   it("labels risk from size, paths, CI and evidence", async () => {
