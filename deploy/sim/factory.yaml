@@ -1,0 +1,43 @@
+# Acme (simulated org) factory.yaml. Teams, people, team factories and connected tools are made in the
+# app during onboarding (Setup); this file holds what a factory engineer reviews as code: the versions
+# being compared and where late outcomes come from.
+outcomes:
+  sources: [github]      # reverts and follow-up fixes on GitHub; CloudEvents bring the rest (POST /v1/events)
+  windowDays: 30
+  intervalMs: 600000
+
+# Every version runs Haiku. Each varies one thing against the baseline, so an A/B isolates it.
+versions:
+  acme-v1:
+    label: baseline
+    models: { default: claude-haiku, routes: [] }
+  acme-v2-skills:
+    label: repo skills + AGENTS.md
+    models: { default: claude-haiku, routes: [] }
+    agentsMd: |
+      - Read AGENTS.md first; it says how to run checks. Run `pnpm typecheck` and the one test file you touched, not the whole suite.
+      - Keep the diff small: change only what the ask needs. No drive-by refactors.
+      - Every change to a page gets one Playwright check in tests/e2e/ that would fail without it.
+    skills:
+      - name: firstword-map
+        description: Where things live in the FirstWord repo (pages, API routes, D1 schema, tests) and how to verify a change quickly. Use before searching the repo.
+        body: |
+          - Pages and routes: src/ (React on Cloudflare Workers via Vite). Marketing pages: marketing/.
+          - Database: drizzle/ (D1). Schema changes need a migration in drizzle/.
+          - Unit tests: tests/*.test.ts (run one: `pnpm exec tsx scripts/run-tests.ts tests/<file>.test.ts` or `pnpm test`).
+          - E2E: tests/e2e/*.spec.ts with Playwright, against STAGE_URL.
+          - Before you push: `pnpm typecheck`, the touched tests, then deploy and screenshot.
+  acme-v3-codegraph:
+    label: CodeGraph index (fewer tokens reading)
+    models: { default: claude-haiku, routes: [] }
+    codegraph: true
+  acme-v4-low-effort:
+    label: low reasoning effort
+    models: { default: claude-haiku, routes: [] }
+    effort: low
+  acme-v5-routing:
+    label: routing policy (Sonnet only for bugs and infra)
+    models: { default: claude-haiku, routes: [{ model: claude-sonnet, labels: [bug, infra] }] }
+
+risk:
+  riskyPaths: ["(^|/)drizzle/", "(^|/)src/billing/", "(^|/)infra/"]
