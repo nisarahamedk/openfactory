@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentHarness, Environment, LedgerReader, TaskRecord, Workspace, WorkspaceHandle } from "@openfactory/contracts";
-import { captureBenchmarkTask, compareArms, createBenchRoutes, defaultCaptureOptions, FileBenchStore, runAB, runAttempt, type ArmResult, type PullRequestSource } from "./index.js";
+import { captureBenchmarkTask, compareArms, BenchService, defaultCaptureOptions, FileBenchStore, runAB, runAttempt, type ArmResult, type PullRequestSource } from "./index.js";
 
 // A tiny repo: add.js is broken at the start commit; the "merged PR" fixed it and added a test.
 function makeOrigin(): { dir: string; base: string } {
@@ -190,19 +190,19 @@ describe("A vs B replay", () => {
 
   it("noise: identical arms are reported as too close to call", () => {
     const mk = (arm: string, passed: boolean, i: number): ArmResult => ({
-      arm, benchmarkTaskId: `b${i % 3}`, factoryVersion: arm, attempt: i, passed, usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }, durationMs: 1, notes: "",
+      arm, benchmarkTaskId: `b${i % 3}`, factoryVersion: arm, attempt: i, passed, usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 }, durationMs: 1, notes: "", checks: null,
     });
     const rs = [...Array(12).keys()].flatMap((i) => [mk("A", i % 2 === 0, i), mk("B", i % 3 !== 0, i)]);
     expect(compareArms(rs, "A", "B").verdict).toBe("too_close");
   });
 });
 
-describe("bench API", () => {
-  it("add-to-benchmark → start run → report, end to end over HTTP", async () => {
+describe("bench service", () => {
+  it("add-to-benchmark → start run → report, end to end", async () => {
     const { dir, base } = makeOrigin();
     const root = mkdtempSync(join(tmpdir(), "bench-api-"));
     const ws = localWorkspace(dir);
-    const app = createBenchRoutes({
+    const bench = new BenchService({
       ledger: ledgerWith(mergedRecord()),
       prs: prSource(base),
       store: new FileBenchStore(root),
@@ -211,31 +211,26 @@ describe("bench API", () => {
       maxCostUsdPerRun: 5,
       now: () => new Date().toISOString(),
     });
-    const post = (path: string, body: unknown) => app.request(path, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
 
-    expect((await post("/tasks/task_nope/benchmark", {})).status).toBe(404);
-    const cap = await post("/tasks/task_abc/benchmark", {});
-    expect(cap.status).toBe(201);
-    const benchId = ((await cap.json()) as { task: { id: string } }).task.id;
+    expect(await bench.capture("task_nope")).toMatchObject({ ok: false, code: "TASK_NOT_FOUND" });
+    const cap = await bench.capture("task_abc");
+    if (!cap.ok) throw new Error(cap.message);
+    const arms = [{ label: "A", factoryVersion: "fv_1", model: "lazy", systemPrompt: "" }, { label: "B", factoryVersion: "fv_2", model: "good", systemPrompt: "" }] as const;
+    expect(await bench.start({ taskIds: [cap.task.id], arms: [arms[0], { ...arms[1], label: "A" }], repeats: 1, maxCostUsd: 1 })).toMatchObject({ ok: false, code: "SAME_LABELS" });
+    expect(await bench.start({ taskIds: ["bench_nope"], arms: [arms[0], arms[1]], repeats: 1, maxCostUsd: 1 })).toMatchObject({ ok: false, code: "BENCHMARK_TASK_NOT_FOUND", id: "bench_nope" });
 
-    const start = await post("/bench/runs", {
-      taskIds: [benchId],
-      arms: [{ label: "A", factoryVersion: "fv_1", model: "lazy" }, { label: "B", factoryVersion: "fv_2", model: "good" }],
-      repeats: 2,
-      maxCostUsd: 50,
-    });
-    expect(start.status).toBe(202);
-    const { run } = (await start.json()) as { run: { id: string; maxCostUsd: number } };
-    expect(run.maxCostUsd).toBe(5);
+    const start = await bench.start({ taskIds: [cap.task.id], arms: [arms[0], arms[1]], repeats: 2, maxCostUsd: 50 });
+    if (!start.ok) throw new Error(start.message);
+    expect(start.run.maxCostUsd).toBe(5);
 
-    let final: { status: string; report: { verdict: string } | null } | null = null;
+    let final = await bench.run(start.run.id);
     for (let i = 0; i < 100 && final?.status !== "done"; i++) {
       await new Promise((r) => setTimeout(r, 50));
-      final = ((await (await app.request(`/bench/runs/${run.id}`)).json()) as { run: typeof final }).run;
+      final = await bench.run(start.run.id);
     }
     expect(final?.status).toBe("done");
     expect(final?.report?.verdict).toBeDefined();
-    expect(existsSync(join(root, "runs", `${run.id}.json`))).toBe(true);
+    expect(existsSync(join(root, "runs", `${start.run.id}.json`))).toBe(true);
   });
 });
 
@@ -369,7 +364,7 @@ describe("world check", () => {
 
 describe("cost and pass together", () => {
   const mk = (arm: string, passed: boolean, cost: number, i: number): ArmResult => ({
-    arm, benchmarkTaskId: `b${i % 3}`, factoryVersion: arm, attempt: i, passed, usage: { inputTokens: 0, outputTokens: 0, costUsd: cost }, durationMs: 1, notes: "",
+    arm, benchmarkTaskId: `b${i % 3}`, factoryVersion: arm, attempt: i, passed, usage: { inputTokens: 0, outputTokens: 0, costUsd: cost }, durationMs: 1, notes: "", checks: null,
   });
   it("same pass rate, B clearly dearer: A is better", () => {
     const rs = [...Array(9).keys()].flatMap((i) => [mk("A", true, 0.25 + (i % 3) * 0.01, i), mk("B", true, 0.37 + (i % 3) * 0.01, i)]);

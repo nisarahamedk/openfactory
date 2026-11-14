@@ -1,13 +1,18 @@
 import { z } from "zod";
 import { BenchmarkTask, ConnectedSource, InboundEvent, OrgFactory, OrgState, OrgTeam, Person, LedgerEvent, RolloutState, SavedView, TaskRecord, Team, type LedgerReader, type TaskId, type TaskStatus, type ViewShare } from "@openfactory/contracts";
 import { BenchRun } from "@openfactory/bench";
-import { FactoryInfo, FactoryView, HealthReport } from "./routes.js";
+import { FactoryInfo, FactoryView, HealthReport } from "@openfactory/contract";
 
 export interface FactoryApiConfig {
   baseUrl: string;
   /** Bearer token for the factory server, or null if it has no auth. */
   token: string | null;
   fetch?: typeof fetch;
+  /**
+   * The person this client acts for, sent as X-Factory-Actor. Only a trusted client that signed the person in
+   * (the factory app) sets it; the server then applies that person's org role and records them as the actor.
+   */
+  actor?: string | null;
 }
 
 /** A failed call to the factory server; `status` is the HTTP status (0 when unreachable). */
@@ -29,10 +34,16 @@ function oneOf<T extends z.ZodType>(item: T, key: string) {
 export class FactoryApi implements LedgerReader {
   constructor(private readonly cfg: FactoryApiConfig) {}
 
+  /** The same client, acting for `login` (see FactoryApiConfig.actor). */
+  actingAs(login: string): FactoryApi {
+    return new FactoryApi({ ...this.cfg, actor: login });
+  }
+
   private async call<T>(method: "GET" | "POST", path: string, schema: z.ZodType<T>, body: unknown = null): Promise<T> {
     const f = this.cfg.fetch ?? fetch;
     const headers: Record<string, string> = { accept: "application/json" };
     if (this.cfg.token !== null) headers.authorization = `Bearer ${this.cfg.token}`;
+    if (this.cfg.actor) headers["x-factory-actor"] = this.cfg.actor;
     if (body !== null) headers["content-type"] = "application/json";
     let res: Response;
     try {

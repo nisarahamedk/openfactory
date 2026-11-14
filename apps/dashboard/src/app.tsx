@@ -148,6 +148,11 @@ export function createDashboard(
     const v = getCookie(c, "of_user");
     return v && LOGIN.test(v) ? v : null;
   };
+  /** The API as the person using the app, so the server applies their org role and audits them by name. */
+  const as = (c: Context): FactoryApi => {
+    const v = viewerOf(c);
+    return v ? api.actingAs(v) : api;
+  };
 
   type PageOpts = { title: string; nav: Nav; inboxCount?: number; refreshSec?: number | undefined; flash?: string | null; scope?: Child };
   const page = async (c: Context, p: PageOpts, body: Child) => {
@@ -306,7 +311,7 @@ export function createDashboard(
     const ask = typeof form.ask === "string" ? form.ask.trim() : "";
     const repo = typeof form.repo === "string" && form.repo !== "" ? form.repo : null;
     try {
-      const r = await api.createTask({ ask, repo, requestedBy: viewer });
+      const r = await as(c).createTask({ ask, repo, requestedBy: viewer });
       return c.redirect(msg("/", `Started. Issue ${r.repo}#${r.issueNumber} holds the conversation; the task shows here in a moment.`), 303);
     } catch (err) {
       if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg("/tasks/new", `Couldn't start it: ${err.message}`), 303);
@@ -333,7 +338,7 @@ export function createDashboard(
     const text = typeof form.text === "string" ? form.text.trim() : "";
     if (text === "") return c.redirect(`/tasks/${id}`, 303);
     try {
-      const r = await api.postMessage(id, { author: viewer, text: text.slice(0, 10_000) });
+      const r = await as(c).postMessage(id, { author: viewer, text: text.slice(0, 10_000) });
       return c.redirect(msg(`/tasks/${id}`, r.url ? "Sent. It's on the PR too, and the agent picks it up now." : "Sent to the agent."), 303);
     } catch (err) {
       if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(`/tasks/${id}`, `Couldn't send: ${err.message}`), 303);
@@ -356,7 +361,7 @@ export function createDashboard(
     const by = viewerOf(c);
     if (!by) return c.redirect(`/signin?back=/tasks/${id}`, 303);
     try {
-      const t = await api.approve(id, { by });
+      const t = await as(c).approve(id, { by });
       const n = new Set((t.approvals ?? []).map((a) => a.by)).size;
       return c.redirect(msg(`/tasks/${id}`, `Approved. ${n} approval${n === 1 ? "" : "s"} so far; merging stays on GitHub.`), 303);
     } catch (err) {
@@ -369,7 +374,7 @@ export function createDashboard(
     const id = TaskId.parse(c.req.param("id"));
     const back = typeof (await c.req.parseBody()).back === "string" ? "/" : `/tasks/${id}`;
     try {
-      const t = await api.retry(id, { by: viewerOf(c) ?? "dashboard" });
+      const t = await as(c).retry(id, { by: viewerOf(c) ?? "dashboard" });
       return c.redirect(msg(back, t.status === "failed" ? "Retrying. The agent picks it up in a moment." : "It's already running again."), 303);
     } catch (err) {
       if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(back, `Couldn't retry: ${err.message}`), 303);
@@ -382,7 +387,7 @@ export function createDashboard(
     const form = await c.req.parseBody();
     const reason = typeof form.reason === "string" && form.reason.trim() !== "" ? form.reason.trim().slice(0, 1000) : undefined;
     try {
-      await api.cancel(id, { by: viewerOf(c) ?? "dashboard", ...(reason ? { reason } : {}) });
+      await as(c).cancel(id, { by: viewerOf(c) ?? "dashboard", ...(reason ? { reason } : {}) });
       return c.redirect(msg(`/tasks/${id}`, "Stopped. The environment is asleep; write to the task to resume."), 303);
     } catch (err) {
       if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(`/tasks/${id}`, `Couldn't stop: ${err.message}`), 303);
@@ -393,7 +398,7 @@ export function createDashboard(
   app.post("/tasks/:id/benchmark", async (c) => {
     const id = TaskId.parse(c.req.param("id"));
     try {
-      const b = await api.addToBenchmark(id);
+      const b = await as(c).addToBenchmark(id);
       return c.redirect(msg("/bench", `Added ${b.id} to the benchmark.`), 303);
     } catch (err) {
       if (err instanceof FactoryApiError && err.status >= 400 && err.status < 500) return c.redirect(msg(`/tasks/${id}`, `Couldn't add to benchmark: ${err.message}`), 303);
@@ -432,14 +437,14 @@ export function createDashboard(
     const share = ViewShare.safeParse(shareKind);
     const nameV = typeof form.name === "string" ? form.name.trim().slice(0, 120) : "";
     if (!share.success || nameV === "") return c.redirect(msg(path, "A view needs a name."), 303);
-    const v = await api.saveView({ ...(typeof form.id === "string" && form.id ? { id: form.id } : {}), name: nameV, path, owner: viewer, share: share.data, team });
+    const v = await as(c).saveView({ ...(typeof form.id === "string" && form.id ? { id: form.id } : {}), name: nameV, path, owner: viewer, share: share.data, team });
     const who = v.share === "me" ? "only you" : v.share === "team" ? `the ${v.team} team` : v.share === "org" ? "everyone in the org" : "anyone with the link";
     return c.redirect(msg(`${path}${path.includes("?") ? "&" : "?"}view=${v.id}`, `Saved "${v.name}" for ${who}.`), 303);
   });
   app.post("/views/:id/delete", async (c) => {
     const viewer = viewerOf(c);
     if (!viewer) return c.redirect("/signin", 303);
-    const ok = await api.deleteView(c.req.param("id"), viewer);
+    const ok = await as(c).deleteView(c.req.param("id"), viewer);
     return c.redirect(msg("/insights", ok ? "View deleted." : "Only its owner can delete a view."), 303);
   });
 
@@ -465,13 +470,13 @@ export function createDashboard(
   });
   const list = (v: unknown) => (typeof v === "string" ? v.split(",").map((x) => x.trim()).filter(Boolean) : []);
   const text = (v: unknown) => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
-  const setupPost = (path: string, anchor: string, run: (form: Record<string, string | File | (string | File)[]>, by: string) => Promise<string>) =>
+  const setupPost = (path: string, anchor: string, run: (form: Record<string, string | File | (string | File)[]>, by: string, api: FactoryApi) => Promise<string>) =>
     app.post(path, async (c) => {
       const by = viewerOf(c);
       if (!by) return c.redirect(`/signin?back=/setup`, 303);
       const form = await c.req.parseBody({ all: true });
       try {
-        const said = await run(form, by);
+        const said = await run(form, by, as(c));
         orgOf = loadOrg();
         return c.redirect(msg(`/setup#${anchor}`, said), 303);
       } catch (err) {
@@ -479,34 +484,34 @@ export function createDashboard(
         throw err;
       }
     });
-  setupPost("/setup/org", "org", async (f, by) => {
+  setupPost("/setup/org", "org", async (f, by, api) => {
     await api.setOrg({ name: text(f.name) ?? "", by });
     return "Saved the org's name.";
   });
-  setupPost("/setup/repo", "repo", async (f, by) => {
+  setupPost("/setup/repo", "repo", async (f, by, api) => {
     await api.connectRepo({ repo: text(f.repo) ?? "", by });
     return `Connected ${text(f.repo)}.`;
   });
-  setupPost("/setup/source", "sources", async (f, by) => {
+  setupPost("/setup/source", "sources", async (f, by, api) => {
     const uses = (Array.isArray(f.uses) ? f.uses : f.uses ? [f.uses] : []).filter((x): x is string => typeof x === "string") as Array<"asks" | "outcomes" | "deploys">;
     const routes = Object.fromEntries(list(f.routes).map((r) => r.split("=").map((x) => x.trim())).filter((r) => r.length === 2 && r[0] && r[1]));
     const reply = { mode: (text(f.replyMode) ?? "record") as "record" | "post" | "cloudevents", tokenEnv: text(f.replyTokenEnv), url: text(f.replyUrl), apiBase: null };
     await api.connectSource({ id: text(f.id) ?? "", kind: (text(f.kind) ?? "cdevents") as never, name: text(f.name) ?? "", ceSource: text(f.ceSource) ?? "", uses, routes, reply, by });
     return `Connected ${text(f.name)}.`;
   });
-  setupPost("/setup/factory", "factories", async (f, by) => {
+  setupPost("/setup/factory", "factories", async (f, by, api) => {
     const high = list(f.high);
     const low = list(f.low);
     await api.saveFactory({ slug: text(f.slug) ?? "", description: text(f.description), scorers: list(f.scorers), benchmarks: list(f.benchmarks), world: text(f.world), mergeRisk: high.length || low.length ? { high, low } : null, by });
     factoriesCacheBust();
     return `Saved the ${text(f.slug)} factory.`;
   });
-  setupPost("/setup/team", "teams", async (f, by) => {
+  setupPost("/setup/team", "teams", async (f, by, api) => {
     const members = list(f.members).map((login, i) => ({ login, role: i === 0 ? ("maintainer" as const) : ("member" as const) }));
     await api.saveTeam({ slug: text(f.slug) ?? "", name: text(f.name) ?? "", description: text(f.description), repos: list(f.repos), factory: text(f.factory) ?? "default", members, scope: { paths: list(f.paths), labels: list(f.labels) }, by });
     return `Saved team ${text(f.name)}.`;
   });
-  setupPost("/setup/person", "people", async (f, by) => {
+  setupPost("/setup/person", "people", async (f, by, api) => {
     const ids = Object.fromEntries((["slack", "msteams", "jira"] as const).map((k) => [k, text(f[k])]).filter(([, v]) => v)) as Record<string, string>;
     await api.invite({ login: text(f.login) ?? "", name: text(f.name), email: text(f.email), persona: (text(f.persona) ?? "engineer") as Persona, ...(text(f.role) ? { role: text(f.role) as "viewer" } : {}), identities: ids, by });
     return `Invited ${text(f.name) ?? text(f.login)}.`;
@@ -563,7 +568,7 @@ export function createDashboard(
     const s = (k: string) => (typeof form[k] === "string" && (form[k] as string).trim() !== "" ? (form[k] as string).trim() : null);
     const share = Number(s("share") ?? 0);
     try {
-      const r = await api.setRollout(slug, { live: s("live"), candidate: s("candidate"), share: Number.isFinite(share) ? share : 0, by: viewer, note: s("note") });
+      const r = await as(c).setRollout(slug, { live: s("live"), candidate: s("candidate"), share: Number.isFinite(share) ? share : 0, by: viewer, note: s("note") });
       factoriesCacheBust();
       const said = r.candidate ? `${r.candidate} now gets ${Math.round(r.share * 100)}% of new tasks.` : `New tasks run on ${r.live ?? "the server's version"}.`;
       return c.redirect(msg(`/factories/${slug}`, said), 303);

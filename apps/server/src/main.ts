@@ -6,7 +6,9 @@
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
-import { captureOptionsFrom, createBenchRoutes, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
+import { BenchService, captureOptionsFrom, defaultCaptureOptions, FileBenchStore, GitHubPullRequestSource, parseCheckSpec } from "@openfactory/bench";
+import { translate, kindOf } from "@openfactory/cloudevents";
+import { createCore, mergeTeams } from "@openfactory/core";
 import { GitHubClient, githubAppFromEnv, parseWebhook } from "@openfactory/github";
 import { teamFor, type RepoRef, type AgentHarness, type CodeForge, type Directory, type MetricsSink, type OutcomeSource, type Signal, type Team, type TaskId, type WorldCheck, type WorkspaceHandle } from "@openfactory/contracts";
 import { globToRegex } from "@openfactory/rules";
@@ -14,20 +16,21 @@ import { FOREMAN_INSTRUCTIONS, FOREMAN_PROVIDER, proxyProvider } from "@openfact
 import { openPostgresLedger } from "@openfactory/ledger";
 import { factScorers } from "@openfactory/scoring";
 import { admitted, applyBundle, bundleMcp, promptTemplates, WorkSlots, scoreAndExport, TaskJobs, watchOutcomes, type JobDeps } from "@openfactory/task-job";
-import { fileEvidenceStore, createApp } from "./app.js";
+import { auditLog, benchPort, githubCodeHost, ledgerTasks, queuedRunner } from "./adapters/core.js";
+import { fileEvidenceStore } from "./adapters/evidence.js";
+import { createApp } from "./entrypoints/http.js";
 import { otlpFromEnv } from "@openfactory/telemetry-otlp";
 import { loadConfig } from "./config.js";
 import { Health } from "./health.js";
 import { cachedDirectory, configDirectory, factoryViews, loadOrgConfig, type FactoryDef } from "./org.js";
 import { tellThreads } from "./replies.js";
-import { createOrgRoutes, mergeTeams } from "./org-api.js";
 import { loadFactoryExtras, loadModelRouting, loadOutcomeConfig, loadSelections, ProviderRegistry } from "./registry.js";
 
 const log = (msg: string, fields: object = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), msg, ...fields }));
 
 async function main() {
   const cfg = loadConfig(process.env);
-  const { ledger, app: store, jobs: jobLog, org: orgStore, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
+  const { ledger, app: store, jobs: jobLog, org: orgStore, audit, close: closeDb } = await openPostgresLedger(cfg.DATABASE_URL);
 
   // A GitHub App when configured (scoped, 1-hour tokens per task), else the PAT.
   const ghApp = githubAppFromEnv(process.env);
@@ -217,27 +220,9 @@ async function main() {
         )
       : null;
 
-  // One signal at a time: the job only records and schedules, so this stays quick.
-  let chain: Promise<unknown> = Promise.resolve();
-  const onSignal = (s: Signal) => {
-    const next = chain.then(() => jobs.handle(s));
-    chain = next.catch((e) => log("signal failed", { id: s.id, type: s.type, error: String(e) }));
-    return next;
-  };
-
-  // Retries share the signal queue too, for the same reason.
-  const onRetry = (id: TaskId, by: string) => {
-    const next = chain.then(() => jobs.retry(id, by));
-    chain = next.catch((e) => log("retry failed", { id, error: String(e) }));
-    return next;
-  };
-
-  // Cancels share the signal queue, so a cancel never races a signal for the same task.
-  const onCancel = (id: TaskId, by: string, reason?: string) => {
-    const next = chain.then(() => jobs.cancel(id, by, reason));
-    chain = next.catch((e) => log("cancel failed", { id, error: String(e) }));
-    return next;
-  };
+  // One queue for signals, cancels and retries: the job only records and schedules, so it stays quick.
+  const runner = queuedRunner(jobs, log);
+  const onSignal = runner.enqueue;
 
   /** A harness for another model (benchmark arms), built on first use from the same plugin. */
   const agentFor = (model: string): AgentHarness => {
@@ -250,7 +235,7 @@ async function main() {
   };
 
   const bench = cfg.BENCH_DIR
-    ? createBenchRoutes({
+    ? new BenchService({
         ledger,
         prs: new GitHubPullRequestSource(serverToken, fetch, "https://api.github.com", process.env.BENCH_ACCEPT_UNMERGED === "1"),
         store: new FileBenchStore(cfg.BENCH_DIR),
@@ -320,68 +305,6 @@ async function main() {
   /** The directory's teams plus the teams made in the app. */
   const allTeams = async () => mergeTeams(await directory.teams(), await orgStore.teams().catch(() => []));
 
-  /** Simulated orgs use made-up logins: never @-mention them on GitHub, where a real user may own the name. */
-  const mention = (login: string) => (process.env.MENTIONS === "off" ? `\`${login}\`` : `@${login}`);
-
-  /** A person writes to a task from the app: post it where the task lives, record it, and hand it to the job as a comment. */
-  const message = async (id: TaskId, author: string, text: string) => {
-    const t = await ledger.getTask(id);
-    if (!t) return null;
-    const target = t.pr?.number ?? t.source.issueNumber;
-    let url: string | null = null;
-    if (target !== null) url = (await chat.post({ repo: t.source.repo, issueOrPr: target }, `**${mention(author)}** wrote in the factory app:\n\n${text}`)).url;
-    const at = new Date().toISOString();
-    const mid = `app:${id}:${Date.now().toString(36)}`;
-    await ledger.append(id, "message_received", { author, text, url }, { dedupeKey: `msg:${mid}` });
-    if (target !== null) await onSignal({ type: "issue_comment", id: mid, repo: t.source.repo, at, actor: { login: author, isBot: false }, issueNumber: target, body: text });
-    return { task: (await ledger.getTask(id))!, url };
-  };
-
-  /** A person approves the PR from the app (or Slack/Teams via the org intake): post it on the PR and record it. */
-  const approve = async (id: TaskId, by: string, note?: string) => {
-    const t = await ledger.getTask(id);
-    if (!t) return null;
-    if (!t.pr || (t.status !== "awaiting_review" && t.status !== "iterating")) throw new Error(`task is ${t.status}; only a PR in review can be approved`);
-    const head = t.pr.headSha;
-    await chat.post({ repo: t.source.repo, issueOrPr: t.pr.number }, `**${mention(by)}** approved${head ? ` \`${head.slice(0, 7)}\`` : ""} in the factory app.${note ? `\n\n${note}` : ""}`);
-    await onSignal({ type: "pr_approved", id: `app-approve:${id}:${by}:${head ?? "nohead"}`, repo: t.source.repo, at: new Date().toISOString(), actor: { login: by, isBot: false }, prNumber: t.pr.number, headSha: head, via: "app" });
-    return ledger.getTask(id);
-  };
-
-  /** A person asks for a task in the app: open a labelled issue where the work belongs, then start it. */
-  const ask = async (input: { ask: string; repo: string | null; requestedBy: string; origin?: { label: string; url: string | null } | null; labels?: string[]; team?: string | null }) => {
-    const known = cfg.repos.map((r) => `${r.owner}/${r.name}`);
-    const teams = await allTeams();
-    const teamRepo = (teams.find((t) => t.slug === input.team) ?? teams.find((t) => t.members.some((m) => m.login === input.requestedBy)))?.repos.find((r) => known.includes(r));
-    const repoName = input.repo ?? teamRepo ?? known[0];
-    if (!repoName || !known.includes(repoName)) throw new Error(`The factory doesn't work in ${repoName ?? "any repo"} yet. Add it to FACTORY_REPOS.`);
-    const [owner, name] = repoName.split("/") as [string, string];
-    const repo = { host: "github" as const, owner, name };
-    const title = input.ask.split("\n")[0]!.trim().slice(0, 120) || "Task from the factory app";
-    const where = input.origin ? (input.origin.url ? `[${input.origin.label}](${input.origin.url})` : input.origin.label) : "the factory app";
-    const body = `${input.ask}\n\n_Asked by ${mention(input.requestedBy)} in ${where}._`;
-    const labels = [cfg.FACTORY_LABEL, ...(input.labels ?? []).filter((l) => l !== cfg.FACTORY_LABEL)];
-    const issue = await gh.request<{ number: number; html_url: string }>("POST", `/repos/${owner}/${name}/issues`, { title, body, labels });
-    await onSignal({ type: "issue_labeled", id: `app-new:${repoName}#${issue.number}`, repo, at: new Date().toISOString(), actor: { login: input.requestedBy, isBot: false }, issueNumber: issue.number, label: cfg.FACTORY_LABEL, title, body, labels });
-    return { issueUrl: issue.html_url, repo: repoName, issueNumber: issue.number };
-  };
-
-  const orgRoutes = createOrgRoutes({
-    store: orgStore,
-    ledger,
-    ask,
-    onSignal,
-    addOutcome: async (taskId, outcome, ref, source) => {
-      const r = await ledger.append(taskId, "outcome_added", { outcome }, { dedupeKey: `outcome:${source}:${taskId}:${outcome.kind}:${ref}`, at: outcome.arrivedAt });
-      if (r.appended) await scoreAndExport(jobDeps, taskId).catch((e) => log("rescore failed", { taskId, error: String(e) }));
-      return r.appended;
-    },
-    repos: () => cfg.repos,
-    factoryLabel: cfg.FACTORY_LABEL,
-    now: () => new Date().toISOString(),
-    log,
-  });
-
   // Answer askers in their own Slack/Teams thread or Jira ticket as their task moves (every 20s).
   const replyTimer = setInterval(() => {
     tellThreads({
@@ -395,25 +318,40 @@ async function main() {
   }, 20_000);
   replyTimer.unref();
 
+  // The application: every operation, for every surface (REST, MCP, CloudEvents), through one registry.
+  const core = createCore({
+    tasks: ledgerTasks(ledger),
+    runner,
+    outcomes: {
+      record: async (taskId, outcome, dedupeKey) => {
+        const r = await ledger.append(taskId, "outcome_added", { outcome }, { dedupeKey, at: outcome.arrivedAt });
+        if (r.appended) await scoreAndExport(jobDeps, taskId).catch((e) => log("rescore failed", { taskId, error: String(e) }));
+        return r.appended;
+      },
+    },
+    codeHost: githubCodeHost(gh, chat),
+    views: store,
+    rollouts: store,
+    org: orgStore,
+    directory,
+    catalog: { info: factoryInfo, factories: async () => factoryViews(await allFactoryDefs(), await allTeams()) },
+    health: { report: () => health.current() },
+    bench: bench ? benchPort(bench) : null,
+    translator: { translate, kindOf },
+    audit: auditLog(audit),
+    config: { repos: () => cfg.repos, factoryLabel: cfg.FACTORY_LABEL, mentions: process.env.MENTIONS !== "off" },
+    now: () => new Date().toISOString(),
+    log,
+  });
+
   const app = createApp({
-    org: orgRoutes,
-    ledger,
-    store,
-    ask,
-    teams: allTeams,
-    factories: async () => factoryViews(await allFactoryDefs(), await allTeams()),
-    message,
-    factory: factoryInfo,
-    cancel: (id, by, reason) => onCancel(id, by, reason),
-    retry: (id, by) => onRetry(id, by),
-    approve,
-    health: () => health.current(),
-    onSignal,
-    evidence,
+    core,
     apiToken: cfg.FACTORY_API_TOKEN,
-    webhook: cfg.GITHUB_WEBHOOK_SECRET && cfg.SIGNALS !== "poll" ? (h, b) => parseWebhook(cfg.GITHUB_WEBHOOK_SECRET!, h, b) : null,
-    bench,
     publicUrl: cfg.PUBLIC_URL,
+    version: "0.0.1",
+    evidence,
+    webhook: cfg.GITHUB_WEBHOOK_SECRET && cfg.SIGNALS !== "poll" ? (h, b) => parseWebhook(cfg.GITHUB_WEBHOOK_SECRET!, h, b) : null,
+    onSignal,
     log,
   });
   const server = serve({ fetch: app.fetch, port: cfg.PORT }, (i) => log("listening", { port: i.port }));

@@ -7,38 +7,12 @@
  * Bot Framework Activity for Microsoft Teams, Jira Cloud webhooks, Datadog webhook integration
  * defaults, Rootly and PagerDuty v3 webhooks) and CDEvents 0.5 for any CI/CD or incident tool.
  */
-import type { CloudEvent, ConnectedSource, Outcome, SourceKind } from "@openfactory/contracts";
+import type { CloudEvent, ConnectedSource, Intake, SourceKind, TaskMatch, ToolActor, TranslateContext } from "@openfactory/contracts";
 
-/** Who in a tool did it. The server maps it to a person by identity, then by email. */
-export type Actor = { kind: SourceKind; id: string | null; email: string | null; name: string | null };
+export type { Intake, TaskMatch, TranslateContext } from "@openfactory/contracts";
 
-/** Which task an outcome belongs to. Any one field can match. */
-export type TaskMatch = { taskId?: string; repo?: string; prNumber?: number; sha?: string };
-
-export type Intake =
-  | {
-      kind: "ask";
-      ask: string;
-      actor: Actor;
-      /** The channel, project or service the ask came from: the source's `routes` map it to a team. */
-      place: string | null;
-      origin: { label: string; url: string | null };
-      labels: string[];
-      /** Where to answer: Slack ts, Teams activity (with conversation and service URL), Jira key. */
-      reply: { thread: string | null; conversation: string | null; serviceUrl: string | null };
-    }
-  | { kind: "merge"; repo: string; prNumber: number; at: string }
-  | { kind: "close"; repo: string; prNumber: number; at: string }
-  | { kind: "outcome"; match: TaskMatch; outcome: Pick<Outcome, "kind" | "detail" | "at">; ref: string }
-  | { kind: "ignore"; reason: string };
-
-export type TranslateContext = {
-  /** The label that means "the factory should do this" (Jira labels, Datadog tags). */
-  factoryLabel: string;
-  /** The connected source the event came from, if any. */
-  source: ConnectedSource | null;
-  now: string;
-};
+/** Who in a tool did it (contracts `ToolActor`). */
+export type Actor = ToolActor;
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);

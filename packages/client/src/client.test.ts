@@ -1,12 +1,17 @@
 import { expect, it } from "vitest";
-import { buildOpenApi, V1_ROUTES } from "./index.js";
+import { FactoryApi } from "./index.js";
 
-it("operation ids are unique and every path parameter is declared", () => {
-  const ids = V1_ROUTES.map((r) => r.operationId);
-  expect(new Set(ids).size).toBe(ids.length);
-  const doc = buildOpenApi({ serverUrl: null, version: "t" }) as { paths: Record<string, Record<string, { parameters?: Array<{ name: string; in: string }> }>> };
-  for (const [path, ops] of Object.entries(doc.paths)) {
-    const wanted = [...path.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
-    for (const op of Object.values(ops)) expect((op.parameters ?? []).filter((p) => p.in === "path").map((p) => p.name)).toEqual(wanted);
-  }
+it("acting for a person sends X-Factory-Actor; the plain client doesn't", async () => {
+  const seen: Array<Record<string, string>> = [];
+  const fetchFake: typeof fetch = async (_url, init) => {
+    seen.push(Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>)));
+    return new Response(JSON.stringify({ tasks: [] }), { headers: { "content-type": "application/json" } });
+  };
+  const api = new FactoryApi({ baseUrl: "http://f.test", token: "tok", fetch: fetchFake });
+  await api.listTasks();
+  await api.actingAs("dana").listTasks();
+  expect(seen.map((h) => [h.authorization, h["x-factory-actor"] ?? null])).toEqual([
+    ["Bearer tok", null],
+    ["Bearer tok", "dana"],
+  ]);
 });

@@ -1,0 +1,28 @@
+{
+  "name": "@openfactory/core",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/memory.d.ts",
+      "default": "./dist/testing/memory.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openfactory/contract": "workspace:*",
+    "@openfactory/contracts": "workspace:*",
+    "zod": "4.1.12",
+    "@orpc/contract": "1.16.1"
+  }
+}
