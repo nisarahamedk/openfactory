@@ -3,7 +3,7 @@ import { fake } from "@openfactory/cloudevents";
 import type { Outcome, Signal, TaskId } from "@openfactory/contracts";
 import { Ledger, OrgStore } from "@openfactory/ledger";
 import { drizzle } from "drizzle-orm/pglite";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createOrgRoutes, mergeTeams, type AskInput } from "./org-api.js";
 
 const NOW = "2026-11-14T00:00:00.000Z";
@@ -101,4 +101,14 @@ it("a CDEvents merge moves the factory PR; deploys and incidents become outcomes
   ]);
   const none = await (await s.post("/events", fake.serviceDeployed({ source: "https://ci.acme", service: "web", environment: "prod", repo: "acme/app", sha: "c".repeat(40) }))).json();
   expect(none.results[0].result.kind).toBe("ignored");
+});
+
+describe("mergeTeams", () => {
+  it("drops the inferred everyone team once the org has teams", async () => {
+    const { mergeTeams } = await import("./org-api.js");
+    const everyone = { slug: "everyone", name: "Everyone", source: "inferred", members: [{ login: "a", name: null, role: "member" as const }], repos: ["o/r"], factory: "default" };
+    const web = { slug: "web", name: "Web", description: null, members: [{ login: "a", role: "member" as const }], repos: ["o/r"], factory: "web", scope: { paths: [], labels: [] }, createdBy: "a", createdAt: "2026-11-14T00:00:00Z" };
+    expect(mergeTeams([everyone] as never, []).map((t) => t.slug)).toEqual(["everyone"]);
+    expect(mergeTeams([everyone] as never, [web] as never).map((t) => t.slug)).toEqual(["web"]);
+  });
 });

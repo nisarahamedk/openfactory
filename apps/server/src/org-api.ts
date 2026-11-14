@@ -91,7 +91,10 @@ export const asTeam = (t: OrgTeam): Team => ({
 });
 
 /** Config teams win on a slug clash: factory.yaml is the reviewed source. */
-export function mergeTeams(config: Team[], app: OrgTeam[]): Team[] {
+export function mergeTeams(directory: Team[], app: OrgTeam[]): Team[] {
+  // The inferred "everyone" team is only a stand-in for an org with no teams; once teams exist it would
+  // claim every person first and send all their work to the default factory.
+  const config = app.length ? directory.filter((t) => t.source !== "inferred") : directory;
   const seen = new Set(config.map((t) => t.slug));
   return [...config, ...app.filter((t) => !seen.has(t.slug)).map(asTeam)];
 }
